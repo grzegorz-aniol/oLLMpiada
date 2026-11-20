@@ -44,7 +44,8 @@ uv run ollmpiada run qwen3-30b-local@high gpt-oss-120b@low --games 4
 
 ## Status
 
-Work in progress towards the MVP: `ollmpiada models` works; competitions do not yet.
+Work in progress towards the MVP: `models`, `probe`, `run` and `show` work; the
+end-to-end check with real models is still to do.
 
 ## Documentation
 

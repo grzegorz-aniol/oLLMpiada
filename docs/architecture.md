@@ -112,9 +112,19 @@ before anything starts, then shows a Rich
 table, statistics table per player and, in visual mode, the game's board and the
 move list with rejected attempts.
 
+Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
+two players must have different names, because statistics are kept per name; to
+let a model play itself, give the two sides different efforts. `tui.py` holds the
+renderers: `LiveView` (subscribes to runner events; the CLI refreshes Rich `Live`
+after each event, with no refresh thread, and routes log warnings through the
+same console so they print above the view), `results_table`, `stats_table`, `summary_lines` (status, totals
+and the odd-game imbalance) and `PlainOutput`. `show` reuses the same tables.
+
 - **Rule:** `run` is scriptable. When stdout is not a terminal it prints one plain
   line per finished game and a final summary instead of the live view, whatever
-  the mode. The exit
+  the mode. A game line reads
+  `game 1: White <a> vs Black <b>: 0-1 (checkmate), 4 moves`; plain lines never
+  wrap, and the last line names the run folder. The exit
   code is 0 when the competition finished and non-zero when it was aborted or
   stopped.
 - Ctrl+C stops the competition: the game in progress is discarded (not listed or
