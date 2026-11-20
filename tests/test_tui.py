@@ -3,11 +3,14 @@ import json
 import os
 import signal
 
+import chess
 import pytest
 from rich.console import Console
 
 from ollmpiada.cli import main
 from ollmpiada.competition import Competition
+from ollmpiada.game_master import GameStarted, MoveMade
+from ollmpiada.games.base import Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse
@@ -182,18 +185,37 @@ def test_live_view_visual_mode_shows_board_moves_and_rejections(tmp_path):
     play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Qh4#"], games=1)
     text = render(view)
     assert "Games 1 of 1 | finished" in text
-    assert "♛" in text and "a  b  c" in text
-    for move in ("1. f3", "   e5", "2. g4", "   Qh4#"):
-        assert move in text
-    assert "✗ 1: " in text and "'Ke3' is not a legal move" in text
+    lines = text.splitlines()
+    moves = next(i for i, line in enumerate(lines) if "(1) f3" in line)
+    assert lines[moves].strip() == (
+        "(1) f3 e5 (2) [✗ 1: 'Ke3' is not a legal move in this position] g4 Qh4#"
+    )
+    assert lines[moves + 1].startswith("8 ") and "♛" in text and "a  b  c" in text
     assert "White" in text and "Black" in text and "checkmate" in text and "Statistics" in text
+
+
+def test_live_view_shows_the_latest_moves_and_keeps_the_board_in_place(tmp_path):
+    view = LiveView(ChessGame(), visual=True)
+    play_into(view, tmp_path, [RESIGN], [], games=1)
+    view.handle(GameStarted(2, ("model-a", "model-b"), chess.Board()))
+
+    def board_row():
+        return next(i for i, line in enumerate(render(view).splitlines()) if line.startswith("8 "))
+
+    empty_list_row = board_row()
+    for turn in range(120):
+        side, move = (Side.FIRST, "Nf3") if turn % 2 == 0 else (Side.SECOND, "Nc6")
+        view.handle(MoveMade(2, side, "model", move, chess.Board(), draw_offered=False))
+    text = render(view)
+    assert board_row() == empty_list_row
+    assert "(60) Nf3 Nc6" in text and "(1) " not in text
 
 
 def test_live_view_background_mode_has_no_board(tmp_path):
     view = LiveView(ChessGame(), visual=False)
     play_into(view, tmp_path, FIRST_SCRIPT, SECOND_SCRIPT)
     text = render(view)
-    assert "♛" not in text and "1. f3" not in text
+    assert "♛" not in text and "(1) f3" not in text
     assert "Games 2 of 2 | finished" in text and "resignation" in text
 
 

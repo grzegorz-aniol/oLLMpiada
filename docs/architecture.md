@@ -110,8 +110,11 @@ A model is named `<id>@<effort>`, as in
 [model fields](configuration.md#model-fields). `run` checks the models and efforts
 before anything starts, then shows a Rich
 `Live` view: status line (games done of total, current game and turn), results
-table, statistics table per player and, in visual mode, the game's board and the
-move list with rejected attempts.
+table, statistics table per player and, in visual mode, the game's board with the
+move list above it. The move list is one wrapped line numbered by move pair,
+`(1) e4 e5 (2) Nf3 Nc6`, with rejected attempts inline in red as
+`[✗ <attempt>: <reason>]`. It keeps a fixed height and shows its most recent
+lines, so the board never moves or gets pushed off.
 
 Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
 two players must have different names, because statistics are kept per name; to

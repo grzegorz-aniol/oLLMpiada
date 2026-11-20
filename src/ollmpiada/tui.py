@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from rich import box
-from rich.console import Console, Group, RenderableType
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.table import Column, Table
 from rich.text import Text
 
@@ -18,7 +18,8 @@ from ollmpiada.competition import (
 from ollmpiada.game_master import AnswerRejected, GameFinished, GameStarted, MoveMade
 from ollmpiada.games.base import Game, Side
 
-MOVE_LIST_ROWS = 20
+# The move list keeps this height, so the board below it never moves.
+MOVE_LIST_LINES = 4
 COMPACT = {"box": box.SIMPLE_HEAD, "collapse_padding": True}
 REASON_SHOWN = 60
 
@@ -105,43 +106,56 @@ class LiveView:
     current: int | None = None
     turn: int = 0
     board: object = None
-    moves: list[Text] = field(default_factory=list)
+    moves: Text = field(default_factory=Text)
+    numbered_turn: int = -1
 
     def handle(self, event: CompetitionEvent) -> None:
         match event:
             case GameStarted(number=number, state=board):
-                self.current, self.turn, self.board, self.moves = number, 0, board, []
+                self.current, self.turn, self.board = number, 0, board
+                self.moves, self.numbered_turn = Text(), -1
             case MoveMade(side=side, move=move, state=board, draw_offered=offered):
+                self._note(side, move + (" (offers draw)" if offered else ""))
                 self.turn += 1
                 self.board = board
-                prefix = f"{(self.turn + 1) // 2}. " if side is Side.FIRST else "   "
-                self.moves.append(Text(prefix + move + (" (offers draw)" if offered else "")))
-            case AnswerRejected(reason=reason, attempt=attempt):
+            case AnswerRejected(side=side, reason=reason, attempt=attempt):
                 reason = " ".join(reason.split())
                 reason = reason if len(reason) <= REASON_SHOWN else reason[:REASON_SHOWN] + "..."
-                self.moves.append(Text(f"   ✗ {attempt}: {reason}", style="red"))
+                self._note(side, f"[✗ {attempt}: {reason}]", style="red")
             case GameFinished():
                 self.current = None
             case CompetitionProgress(state=state) | CompetitionFinished(state=state):
                 self.state = state
 
-    def __rich__(self) -> RenderableType:
+    def _note(self, side: Side, entry: str, style: str = "") -> None:
+        """Append to the flowing move list, numbering each pair before its first entry."""
+        if side is Side.FIRST and self.numbered_turn != self.turn:
+            self.numbered_turn = self.turn
+            self.moves.append(f"({self.turn // 2 + 1}) ")
+        self.moves.append(entry, style=style)
+        self.moves.append(" ")
+
+    def _move_list(self, console: Console, width: int) -> Text:
+        """The last lines of the wrapped move list, padded to a fixed height."""
+        lines = list(self.moves.wrap(console, width))[-MOVE_LIST_LINES:]
+        padding = [Text()] * (MOVE_LIST_LINES - len(lines))
+        return Text("\n").join(padding + lines)
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         if self.state is None:
-            return Text("Starting...")
+            yield Text("Starting...")
+            return
         status = Text(f"Games {len(self.state.results)} of {self.state.games}")
         if self.current is not None:
             # Moves per side, the unit of --max-turns.
             status.append(f" | game {self.current}, move {self.turn // 2 + 1}")
         status.append(f" | {self.state.status}")
-        parts: list[RenderableType] = [status]
+        yield status
         if self.visual and self.board is not None:
-            board_and_moves = Table.grid(padding=(0, 4))
-            board_and_moves.add_row(
-                self.game.render(self.board), Group(*self.moves[-MOVE_LIST_ROWS:])
-            )
-            parts.append(board_and_moves)
-        parts += [results_table(self.state), stats_table(self.state)]
-        return Group(*parts)
+            yield self._move_list(console, options.max_width)
+            yield self.game.render(self.board)
+        yield results_table(self.state)
+        yield stats_table(self.state)
 
 
 class PlainOutput:
