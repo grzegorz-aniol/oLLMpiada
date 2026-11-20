@@ -26,8 +26,12 @@ uv run pytest tests/test_x.py -k name   # one test
   scripted fake players that return prepared answers (legal moves, illegal moves,
   resignations, timeouts), so every end-of-game rule in
   [game master](game-master.md#end-of-game) is testable offline.
+  The fake is `ScriptedPlayer` in `tests/fakes.py`; `tests/conftest.py` holds the
+  shared model config fixtures (`models_data`, `models_file`).
 - Player adapters are tested against recorded HTTP exchanges or PydanticAI's
-  `TestModel` / `FunctionModel`, never a live endpoint.
+  `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI client takes an
+  `httpx2` client (`httpx2.MockTransport`); the decision player uses `httpx`
+  (`httpx.MockTransport`).
 - Terminal views are tested by rendering into a recording Rich `Console`
   (`Console(record=True)`) and checking the exported text; CLI commands are
   tested by calling the entry point with arguments and checking output and exit

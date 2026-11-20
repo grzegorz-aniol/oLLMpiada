@@ -91,6 +91,26 @@ class Game[S](ABC):
     def side_name(self, side: Side) -> str:
         return self.side_names[0 if side is Side.FIRST else 1]
 
+    def context(
+        self,
+        state: S,
+        *,
+        turn: int,
+        max_turns: int,
+        draw_offered: bool = False,
+        rejection: str | None = None,
+    ) -> PromptContext:
+        """The prompt context for the side to move in `state`."""
+        return PromptContext(
+            side=self.side_to_move(state),
+            position=self.describe(state),
+            legal_moves=list(self.legal_moves(state).values()),
+            turn=turn,
+            max_turns=max_turns,
+            draw_offered=draw_offered,
+            rejection=rejection,
+        )
+
     def prompt(self, ctx: PromptContext) -> str:
         """Render the shared prompt; players append their own answer format."""
         text = Template(self.prompt_template).substitute(

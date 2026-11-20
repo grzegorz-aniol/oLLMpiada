@@ -6,6 +6,8 @@ import pytest
 
 import ollmpiada
 from ollmpiada.cli import main
+from ollmpiada.players.base import TransportError
+from tests.fakes import ScriptedPlayer, unreadable
 
 
 def models_rows(out: str) -> dict[str, list[str]]:
@@ -63,3 +65,55 @@ def test_entry_point_loads_dotenv_but_shell_values_win(
     assert exit_info.value.code == 0
     assert "from-dotenv" in models_rows(capsys.readouterr().out)
     assert os.environ["TEST_HOSTED_KEY"] == "secret"
+
+
+@pytest.fixture
+def probe_with(monkeypatch, models_file):
+    """Run `probe` against a scripted player instead of a real model."""
+
+    def run(*script, name="local-llm@high"):
+        player = ScriptedPlayer(name, list(script))
+        created = []
+
+        def fake_create(player_name, models, *, timeout_s):
+            created.append((player_name, timeout_s))
+            return player
+
+        monkeypatch.setattr("ollmpiada.cli.create_player", fake_create)
+        code = main(["probe", name])
+        return code, player, created
+
+    return run
+
+
+def test_probe_prints_parsed_answer_time_and_tokens(probe_with, capsys):
+    code, player, created = probe_with("Nf3")
+    out = capsys.readouterr().out
+    assert code == 0
+    assert created == [("local-llm@high", 120)]
+    assert "legal (Nf3)" in out and "1.00 s" in out and "in 100, out 10" in out
+    request = player.requests[0]
+    assert len(request.legal_moves) == 20 and not request.draw_offered
+    assert "as White" in request.prompt and "move 1 of 100" in request.prompt
+
+
+def test_probe_reports_an_illegal_move(probe_with, capsys):
+    code, _, _ = probe_with("e5")
+    assert code == 0
+    assert "illegal: 'e5' is not a legal move" in capsys.readouterr().out
+
+
+def test_probe_fails_on_a_format_error(probe_with, capsys):
+    code, _, _ = probe_with(unreadable("I like e4"))
+    out = capsys.readouterr().out
+    assert code == 1 and "format error" in out and "I like e4" in out
+
+
+def test_probe_fails_on_a_transport_error(probe_with, capsys):
+    code, _, _ = probe_with(TransportError("connection refused"))
+    assert code == 1 and "connection refused" in capsys.readouterr().out
+
+
+def test_probe_rejects_an_unknown_model(models_file, capsys):
+    assert main(["probe", "nope@high"]) == 2
+    assert "unknown model 'nope'" in capsys.readouterr().out

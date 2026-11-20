@@ -108,8 +108,9 @@ Planned layout; replace this note with real entries as the modules land.
 - `src/ollmpiada/config.py` - settings, model config models and loader.
 - `src/ollmpiada/games/` - `base.py` (game interface, outcome types) and
   one module per game (`chess_game.py`, prompt template beside it).
-- `src/ollmpiada/players/` - `base.py` (player interface, answer and usage
-  types), `llm.py`, `decision.py`.
+- `src/ollmpiada/players/` - `__init__.py` (`create_player` from a
+  `<id>[@effort]` name), `base.py` (player interface, answer and usage types),
+  `llm.py`, `decision.py`.
 - `src/ollmpiada/game_master.py` - one game's turn loop.
 - `src/ollmpiada/competition.py` - runner, statistics, events, persistence.
 - `src/ollmpiada/tui.py` - Rich live view, results and statistics tables,

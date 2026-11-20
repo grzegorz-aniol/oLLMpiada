@@ -27,6 +27,7 @@ interface, so the game master, players and UI never import chess directly:
 | `describe(state)` | Position text for the prompt (board, history, extra facts) |
 | `side_names` | Display names of the two sides (for chess `White`, `Black`), used in tables and summaries |
 | `render(state)` | Board for the terminal UI, as a Rich renderable |
+| `context(state, ...)` | The prompt context for the side to move: position, legal moves, turn, draw offer, rejection (implemented once in the base class) |
 | `prompt(context)` | The shared prompt, rendered from `prompt_template` (implemented once in the base class) |
 | `record(state, outcome, players)` | The game's native record saved with each game, and `record_extension` (for chess PGN, `pgn`) |
 
@@ -109,6 +110,11 @@ class TurnAnswer(BaseModel):
 ```
 
 The chosen reasoning effort goes in as `OpenAIChatModelSettings(openai_reasoning_effort=...)`.
+The adapter appends a short ANSWER FORMAT section naming the three fields, sets
+`request_timeout` from `OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the OpenAI
+client's own retries, so the game master owns every retry. Without a token the
+`Authorization` header is omitted per request (`extra_headers` with `openai.Omit`),
+because the OpenAI client otherwise always sends one.
 
 - **Sensitive:** PydanticAI retries invalid structured output on its own. Set its
   output retries to zero and let the game master retry, so every rejection is
@@ -145,6 +151,12 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
   model's fault: retry twice with backoff, then abort the game and stop the
   competition with the error shown. Aborted games do not count as wins, losses or
   draws.
+- Players raise `TransportError` for every failed call, HTTP 4xx included (bad
+  request, authentication, a decision server refusing too many options): a retry
+  rarely fixes those, but they are not the model's answer either, so they stop the
+  game loudly instead of counting as illegal attempts. A reply that arrives but
+  does not match the answer format is returned as a format error and counts as a
+  rejected attempt.
 
 ## End of game
 
@@ -178,7 +190,9 @@ effort (see [configuration](configuration.md#model-fields)).
   included, game master work excluded. Shown as total and average per move.
 - **Tokens** - input, output and reasoning tokens from PydanticAI's usage for LLM
   players; from the response for decision players when it reports any, otherwise
-  shown as unknown, never as zero.
+  shown as unknown, never as zero. Reasoning tokens are unknown on their own when
+  a server reports usage without them (llama.cpp sends no
+  `completion_tokens_details`).
 - **Illegal attempts** - rejected answers, total and per game.
 
 Each finished game is written to the competition folder in `runs/` with its game

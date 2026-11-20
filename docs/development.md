@@ -25,6 +25,7 @@ decision models); this app only calls them.
 | Task | Command |
 | --- | --- |
 | List models | `uv run ollmpiada models` |
+| Check one model's answers | `uv run ollmpiada probe <model>[@effort]` (one real request) |
 | Play a competition | `uv run ollmpiada run <a>[@effort] <b>[@effort]` (flags in [architecture](architecture.md#cli-and-terminal-ui)) |
 | Tests | `uv run pytest` |
 | Lint and format | `uv run ruff check --fix && uv run ruff format` |
