@@ -390,6 +390,15 @@ def test_game_stats_freeze_when_the_game_ends(tmp_path):
     assert row(lines, "model-b") == ["Black", "model-b", "0:00", "2", "200", "20", "0"]
 
 
+def test_game_stats_follow_the_side_swap_in_the_next_game(tmp_path):
+    view = LiveView(ChessGame(), visual=True, clock=FakeClock())
+    play_into(view, tmp_path, FIRST_SCRIPT, SECOND_SCRIPT)
+    lines = render(view).splitlines()
+    assert any("1 move completed" in line for line in lines)
+    assert row(lines, "model-b")[:2] == ["White", "model-b"]
+    assert row(lines, "model-a")[:2] == ["Black", "model-a"]
+
+
 def test_game_stats_of_a_stopped_game_stop_ticking(tmp_path):
     clock = FakeClock()
     view, state = started_game(tmp_path, clock)
