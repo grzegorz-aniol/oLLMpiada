@@ -1,0 +1,9 @@
+# Project-level Codex config. Loaded only when the project is trusted; the closest
+# .codex/config.toml to the working directory wins. Personal defaults belong in
+# ~/.codex/config.toml, which has no per-project local override file.
+
+# approval_policy = "on-request"
+# sandbox_mode = "workspace-write"
+
+# [mcp_servers.<name>]
+# url = "http://localhost:<port>/mcp"

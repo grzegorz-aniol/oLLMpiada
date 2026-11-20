@@ -1,0 +1,40 @@
+[project]
+name = "ollmpiada"
+version = "0.1.0"
+description = "Board-game competitions between AI models, refereed by a game master that collects match statistics."
+readme = "README.md"
+authors = [
+    { name = "Grzegorz Aniol", email = "grzegorz.aniol@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "chess>=1.11.2",
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "pydantic-ai-slim[openai]>=2.71.0",
+    "python-dotenv>=1.2.4",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+ollmpiada = "ollmpiada:main"
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

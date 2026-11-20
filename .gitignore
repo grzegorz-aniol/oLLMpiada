@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node / TypeScript
+node_modules/
+dist-ssr/
+*.tsbuildinfo
+coverage/
+.vite/
+*.local
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Coding agents (personal or generated)
+.claude/settings.local.json
+CLAUDE.local.md
+.opencode/node_modules/
+.opencode/package.json
+.opencode/bun.lock
+
+# Logs
+logs/
+*.log
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Competition results
+runs/
+.local
+config/models.json
