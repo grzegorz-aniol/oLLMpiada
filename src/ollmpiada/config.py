@@ -42,7 +42,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         raise ConfigError(f"OLLMPIADA_REQUEST_TIMEOUT_S must be a positive number, not {timeout!r}")
     return Settings(
         models_config=Path(env.get("OLLMPIADA_MODELS_CONFIG") or "config/models.json"),
-        runs_dir=Path(env.get("OLLMPIADA_RUNS_DIR") or "runs"),
+        runs_dir=Path(env.get("OLLMPIADA_RUNS_DIR") or ".local/runs"),
         request_timeout_s=request_timeout_s,
     )
 

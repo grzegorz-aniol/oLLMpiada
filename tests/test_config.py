@@ -16,7 +16,7 @@ def write(tmp_path: Path, data: object) -> Path:
 def test_settings_defaults():
     settings = load_settings({})
     assert settings.models_config == Path("config/models.json")
-    assert settings.runs_dir == Path("runs")
+    assert settings.runs_dir == Path(".local/runs")
     assert settings.request_timeout_s == 120
 
 

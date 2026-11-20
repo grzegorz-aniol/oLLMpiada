@@ -229,6 +229,6 @@ effort (see [configuration](configuration.md#model-fields)).
   `completion_tokens_details`).
 - **Illegal attempts** - rejected answers, total and per game.
 
-Each finished game is written to the competition folder in `runs/` with its game
+Each finished game is written to the competition folder in `.local/runs/` with its game
 record (PGN for chess), result, reason and per-move costs; the competition file holds the settings,
 prompt version and totals.

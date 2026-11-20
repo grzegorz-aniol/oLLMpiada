@@ -111,6 +111,6 @@ not read it. `.env.example` lists the variable names with empty values.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OLLMPIADA_MODELS_CONFIG` | `config/models.json` | Path to the model config |
-| `OLLMPIADA_RUNS_DIR` | `runs` | Where competition results are written |
+| `OLLMPIADA_RUNS_DIR` | `.local/runs` | Where competition results are written |
 | `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call |
 | *names from `token_env`* | none | Provider tokens |

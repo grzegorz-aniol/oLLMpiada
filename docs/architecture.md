@@ -11,7 +11,7 @@ Owner of: components, data flow and the code map.
 ## Overview
 
 ```text
- ollmpiada run ──flags──▶ CLI ──start──▶ competition runner ──▶ runs/
+ ollmpiada run ──flags──▶ CLI ──start──▶ competition runner ──▶ .local/runs/
                                             │  for each game
    terminal ◀── live view ◀──── events ─────┤
                                             ▼
@@ -65,7 +65,7 @@ Runs one game: turn loop, validation, retries, end of game. Contract:
 ### Competition runner
 
 Runs a series of games between two players: alternates sides, aggregates
-statistics, writes results to `runs/`, publishes events, and handles a stop
+statistics, writes results to `.local/runs/`, publishes events, and handles a stop
 request (the CLI sends one on Ctrl+C).
 
 - **Decision:** visual and background mode run the same code. The mode only
@@ -83,8 +83,12 @@ game) and `CompetitionFinished`; both carry the live `CompetitionState` (results
 per-player `PlayerStats`, status `running`, `finished`, `aborted` or `stopped`).
 An aborted game ends the competition.
 
-Results go to `runs/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, rewritten after every game so a
-crash loses at most the game in progress:
+Results go to `<runs dir>/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, where the runs dir is
+`OLLMPIADA_RUNS_DIR` (default `.local/runs`, see
+[configuration](configuration.md#environment)). Missing parent folders are
+created; an existing run folder stops the run instead of mixing two competitions.
+The files are rewritten after every game so a crash loses at most the game in
+progress:
 
 - `competition.json` - settings (game, players, games, max turns), the
   `CompetitionState` fields, and `prompt_version`, defined in
@@ -167,5 +171,5 @@ Planned layout; replace this note with real entries as the modules land.
 - `src/ollmpiada/tui.py` - Rich live view, results and statistics tables,
   plain output for scripts.
 - `config/models.json` - providers and models.
-- `runs/` - competition results, gitignored.
+- `.local/runs/` - competition results, gitignored with the rest of `.local/`.
 - `docs/images/` - images for the README and docs, as WebP sized for the page.

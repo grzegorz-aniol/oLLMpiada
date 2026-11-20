@@ -36,7 +36,7 @@ def compete(a_script, b_script, tmp_path, *, games=2, on_event=None):
         (a, b),
         games=games,
         max_turns=20,
-        runs_dir=tmp_path / "runs",
+        runs_dir=tmp_path / ".local" / "runs",
         publish=publish,
         backoff_s=(0, 0),
     )
@@ -80,7 +80,7 @@ def test_results_are_saved_after_every_game(tmp_path):
         ["f3", "g4", RESIGN], ["e5", "Qh4#", "e4"], tmp_path, on_event=check_files
     )
     run_dir = competition.run_dir
-    assert run_dir.parent == tmp_path / "runs"
+    assert run_dir.parent == tmp_path / ".local" / "runs"
     assert run_dir.name.endswith("_model-a@high_vs_model-b")
     assert len(saved[0]["results"]) == 1 and saved[0]["status"] == "running"
 
@@ -122,6 +122,12 @@ def test_unreported_reasoning_tokens_are_counted_as_unknown(tmp_path):
     a = state.stats["model-a@high"]
     assert (a.input_tokens, a.output_tokens, a.reasoning_tokens) == (40, 5, 0)
     assert a.tokens_known and a.calls_without_reasoning == 1
+
+
+def test_an_existing_run_folder_is_not_reused(tmp_path):
+    _, competition, _ = compete([RESIGN], [], tmp_path, games=1)
+    with pytest.raises(FileExistsError):
+        asyncio.run(competition.run())
 
 
 def test_players_must_have_different_names(tmp_path):

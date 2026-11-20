@@ -27,7 +27,7 @@ decision models); this app only calls them.
 | List models | `uv run ollmpiada models` |
 | Check one model's answers | `uv run ollmpiada probe <model>[@effort]` (one real request) |
 | Play a competition | `uv run ollmpiada run <a>[@effort] <b>[@effort]` (flags in [architecture](architecture.md#cli-and-terminal-ui)) |
-| Show a saved competition | `uv run ollmpiada show runs/<run-folder>` |
+| Show a saved competition | `uv run ollmpiada show .local/runs/<run-folder>` |
 | Tests | `uv run pytest` |
 | Lint and format | `uv run ruff check --fix && uv run ruff format` |
 | Documentation check | `uv run python scripts/check_docs.py` |

@@ -48,7 +48,7 @@ The rules of refereeing, prompting and scoring are owned by
   be scripted. A web UI can come later as another consumer of the runner's events.
 - **Decision:** one competition runs at a time, its games one after another.
   Parallel games are a later option, not part of the MVP.
-- **Decision:** results are written to disk per competition (`runs/`), so a
+- **Decision:** results are written to disk per competition (`.local/runs/`), so a
   finished competition can be inspected after a restart. Leaderboards across
   competitions are not part of the MVP.
 
