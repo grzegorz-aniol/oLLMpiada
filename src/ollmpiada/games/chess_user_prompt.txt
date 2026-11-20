@@ -1,0 +1,15 @@
+POSITION
+
+$position
+
+This is your move $turn of $max_turns ($turns_left left, including this one).
+$draw_offer
+
+LEGAL MOVES
+
+You play $side. Your legal moves (SAN): $legal_moves
+
+Unless you resign or accept a draw, choose exactly one move from this list.
+Before answering, check that your move appears in it, spelled as listed.
+
+$previous_attempt

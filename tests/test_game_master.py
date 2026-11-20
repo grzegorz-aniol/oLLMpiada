@@ -72,7 +72,7 @@ def test_accepted_draw_offer_is_a_draw():
     assert [m.draw_offered for m in moves] == [True]
     assert result.outcome == Outcome(None, "draw agreed")
     assert black.requests[0].draw_offered
-    assert "White offers a draw" in black.requests[0].prompt
+    assert "White offers a draw" in black.requests[0].prompt.user
 
 
 @pytest.mark.parametrize(
@@ -103,7 +103,7 @@ def test_turn_limit_ends_after_both_sides_made_max_turns_moves():
     result, white, black = run(["e4", "Nf3"], ["e5", "Nc6"], max_turns=2)
     assert result.outcome == Outcome(None, "turn limit")
     assert len(result.turns) == 4
-    assert "move 2 of 2 (1 left" in black.requests[1].prompt
+    assert "move 2 of 2 (1 left" in black.requests[1].prompt.user
 
 
 def test_third_rejected_answer_loses():
@@ -120,8 +120,8 @@ def test_third_rejected_answer_loses():
 def test_rejection_reason_is_fed_back_and_the_retry_counts():
     events = []
     result, white, _ = run(["e5", "e4", RESIGN], ["e5"], events=events)
-    assert "PREVIOUS ATTEMPT" not in white.requests[0].prompt
-    retry = white.requests[1].prompt
+    assert "PREVIOUS ATTEMPT" not in white.requests[0].prompt.user
+    retry = white.requests[1].prompt.user
     assert "PREVIOUS ATTEMPT" in retry and "'e5' is not a legal move" in retry
     assert '"move":"e5"' in retry
     first = result.turns[0]

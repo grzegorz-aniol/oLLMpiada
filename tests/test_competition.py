@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 
 import pytest
@@ -11,6 +12,7 @@ from ollmpiada.competition import (
     prompt_version,
 )
 from ollmpiada.game_master import GameStarted, MoveMade
+from ollmpiada.games.base import Prompt
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
 from tests.fakes import ScriptedPlayer
@@ -174,11 +176,15 @@ def test_progress_events_carry_the_state(tmp_path):
     assert sum(isinstance(e, MoveMade) for e in events) == 5
 
 
-def test_prompt_version_follows_the_wording():
+@pytest.mark.parametrize(
+    ("template", "old", "new"),
+    [("system_template", "win", "triumph"), ("user_template", "Before answering", "First")],
+)
+def test_prompt_version_follows_the_wording_of_both_parts(template, old, new):
     game = ChessGame()
     version = prompt_version(game)
     assert len(version) == 12 and version == prompt_version(ChessGame())
-    game.prompt_template = game.prompt_template.replace("win", "triumph")
+    setattr(game, template, getattr(game, template).replace(old, new))
     assert prompt_version(game) != version
 
 
@@ -187,9 +193,29 @@ def test_prompt_version_covers_the_no_offer_wording(monkeypatch):
     original = ChessGame.prompt
 
     def reworded(self, ctx):
-        return original(self, ctx).replace("No draw offer is pending.", "No offer.")
+        prompt = original(self, ctx)
+        user = prompt.user.replace("No draw offer is pending.", "No offer.")
+        return dataclasses.replace(prompt, user=user)
 
     monkeypatch.setattr(ChessGame, "prompt", reworded)
+    assert prompt_version(ChessGame()) != version
+
+
+def test_prompt_version_tells_the_system_and_user_parts_apart(monkeypatch):
+    original = ChessGame.prompt
+
+    def version_with(extend):
+        monkeypatch.setattr(ChessGame, "prompt", lambda self, ctx: extend(original(self, ctx)))
+        return prompt_version(ChessGame())
+
+    in_system = version_with(lambda p: Prompt(p.system + "Extra.\n", p.user))
+    in_user = version_with(lambda p: Prompt(p.system, "Extra.\n" + p.user))
+    assert in_system != in_user
+
+
+def test_prompt_version_covers_the_llm_answer_format(monkeypatch):
+    version = prompt_version(ChessGame())
+    monkeypatch.setattr("ollmpiada.competition.ANSWER_FORMAT", "ANSWER IN JSON")
     assert prompt_version(ChessGame()) != version
 
 

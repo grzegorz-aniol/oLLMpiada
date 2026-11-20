@@ -9,6 +9,7 @@ from rich.text import Text
 
 from ollmpiada.games.base import Game, IllegalMove, Outcome, Side
 
+HERE = Path(__file__).parent
 REASONS = {
     chess.Termination.CHECKMATE: "checkmate",
     chess.Termination.STALEMATE: "stalemate",
@@ -41,7 +42,8 @@ def _undisambiguated(san: str) -> str:
 class ChessGame(Game[chess.Board]):
     name = "chess"
     side_names = ("White", "Black")
-    prompt_template = Path(__file__).with_name("chess_prompt.txt").read_text(encoding="utf-8")
+    system_template = (HERE / "chess_system_prompt.txt").read_text(encoding="utf-8")
+    user_template = (HERE / "chess_user_prompt.txt").read_text(encoding="utf-8")
     record_extension = "pgn"
 
     def new_state(self) -> chess.Board:

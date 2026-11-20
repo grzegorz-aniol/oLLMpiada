@@ -41,7 +41,8 @@ models. Contract: [configuration](configuration.md).
 ### Games
 
 One module per game implementing the game interface owned by
-[game master](game-master.md#game-abstraction), plus its prompt template.
+[game master](game-master.md#game-abstraction), plus its prompt templates
+(system and user part).
 Games are registered by name in `games/__init__.py`; `--game` picks one.
 
 A game module is self-contained: rules, prompt, terminal board, side names and
@@ -51,9 +52,9 @@ interface and the registry; what adding a game may touch is ruled in
 
 ### Players
 
-One adapter per provider `api` (see [provider fields](configuration.md#provider-fields)). A player receives the shared prompt and the turn's
-legal moves, adds its own answer format, calls the model and returns the raw
-answer with elapsed time and token usage. **Rule:** players never validate moves
+One adapter per provider `api` (see [provider fields](configuration.md#provider-fields)). A player receives the shared prompt (system and user
+part) and the turn's legal moves, adds its own answer format, calls the model and
+returns the raw answer with elapsed time and token usage. **Rule:** players never validate moves
 or touch game state; that is the game master's job.
 
 ### Game master
@@ -86,8 +87,8 @@ Results go to `runs/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, rewritten after every game s
 crash loses at most the game in progress:
 
 - `competition.json` - settings (game, players, games, max turns), the
-  `CompetitionState` fields, and `prompt_version`: a hash of a fully rendered
-  sample prompt, so it changes with the template and with the wording in code.
+  `CompetitionState` fields, and `prompt_version`, defined in
+  [prompts](game-master.md#prompts).
 - `game-NNN.<ext>` - the game's record (`.pgn` for chess), written for aborted
   games too.
 - `game-NNN.json` - result, reason, side names and every turn with its attempts
@@ -157,7 +158,7 @@ Planned layout; replace this note with real entries as the modules land.
 - `src/ollmpiada/cli.py` - argparse subcommands `models`, `probe`, `run`, `show`.
 - `src/ollmpiada/config.py` - settings, model config models and loader.
 - `src/ollmpiada/games/` - `base.py` (game interface, outcome types) and
-  one module per game (`chess_game.py`, prompt template beside it).
+  one module per game (`chess_game.py`, prompt templates beside it).
 - `src/ollmpiada/players/` - `__init__.py` (`create_player` from a
   `<id>[@effort]` name), `base.py` (player interface, answer and usage types),
   `llm.py`, `decision.py`.

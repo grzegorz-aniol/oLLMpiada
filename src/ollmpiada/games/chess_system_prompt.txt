@@ -21,19 +21,3 @@ A referee enforces these rules:
 - Draw offers: you may offer a draw together with your move. The offer is open for
   your opponent's next answer only, and any move declines it. To accept your
   opponent's pending offer, answer with the action accept_draw.
-
-POSITION
-
-$position
-
-This is your move $turn of $max_turns ($turns_left left, including this one).
-$draw_offer
-
-LEGAL MOVES
-
-You play $side. Your legal moves (SAN): $legal_moves
-
-Unless you resign or accept a draw, choose exactly one move from this list.
-Before answering, check that your move appears in it, spelled as listed.
-
-$previous_attempt

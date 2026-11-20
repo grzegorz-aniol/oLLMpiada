@@ -29,7 +29,7 @@ class DecisionPlayer:
     async def play(self, request: TurnRequest) -> TurnResponse:
         payload = {
             "model": self._model.spec.model,
-            "state": request.prompt,
+            "state": request.prompt.text,
             "questions": questions(request),
         }
         headers = {"Authorization": f"Bearer {self._model.token}"} if self._model.token else {}

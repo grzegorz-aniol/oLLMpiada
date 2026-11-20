@@ -11,13 +11,16 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from ollmpiada.config import load_models
+from ollmpiada.games.base import Prompt
 from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
-from ollmpiada.players.llm import LLMPlayer, create_llm_player
+from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player
 from tests.fakes import ScriptedPlayer, unreadable
 
-REQUEST = TurnRequest(prompt="PROMPT", legal_moves={"e2e4": "e4", "g1f3": "Nf3"})
+PROMPT = Prompt(system="RULES\n", user="POSITION\n")
+REQUEST = TurnRequest(prompt=PROMPT, legal_moves={"e2e4": "e4", "g1f3": "Nf3"})
+SYSTEM_SENT = (PROMPT.system + ANSWER_FORMAT).strip()
 
 
 @pytest.fixture
@@ -98,16 +101,19 @@ def test_llm_answer_with_usage_and_settings():
     assert settings["request_timeout"] == 7 and settings["max_retries"] == 0
 
 
-def test_llm_prompt_is_shared_prompt_plus_answer_format():
-    prompts = []
+def test_llm_sends_rules_and_answer_format_as_instructions_and_the_turn_as_user_prompt():
+    requests = []
 
     def capture(messages, info):
-        prompts.append(messages[-1].parts[-1].content)
+        requests.append(messages[-1])
         return tool_reply({"action": "resign"})(messages, info)
 
     player = LLMPlayer("p", FunctionModel(capture), timeout_s=7)
     play(player)
-    assert prompts[0].startswith("PROMPT\n") and "ANSWER FORMAT" in prompts[0]
+    request = requests[0]
+    assert request.instructions == SYSTEM_SENT
+    assert SYSTEM_SENT.startswith("RULES\n\nANSWER FORMAT\n")
+    assert [part.content for part in request.parts] == ["POSITION\n"]
 
 
 def test_llm_without_effort_sends_none():
@@ -207,6 +213,10 @@ def test_llm_over_openai_compatible_http(models, model_id, authorization):
     body = json.loads(request.content)
     assert body["model"] == models[model_id].spec.model
     assert body.get("reasoning_effort") == effort
+    assert body["messages"] == [
+        {"role": "system", "content": SYSTEM_SENT},
+        {"role": "user", "content": "POSITION\n"},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -319,6 +329,10 @@ def test_llm_over_anthropic_messages_http(
     assert request.headers.get("authorization") == authorization
     body = json.loads(request.content)
     assert body["model"] == "anthropic/claude-haiku-5-5"
+    assert body["system"] == [{"type": "text", "text": SYSTEM_SENT}]
+    assert body["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "POSITION\n"}]}
+    ]
     assert body.get("thinking") == thinking
     assert body.get("output_config", {}).get("effort") == output_effort
 
@@ -371,7 +385,7 @@ def test_decision_request_shape_without_token(models):
     assert str(request.url) == "http://basal/v1/systemone"
     assert "authorization" not in request.headers
     payload = json.loads(request.content)
-    assert payload["model"] == "basal" and payload["state"] == "PROMPT"
+    assert payload["model"] == "basal" and payload["state"] == "RULES\n\nPOSITION\n"
     questions = payload["questions"]
     assert set(questions) == {"action", "move", "offer_draw"}
     assert all(q["type"] == "choice" for q in questions.values())
@@ -382,7 +396,7 @@ def test_decision_request_shape_without_token(models):
 
 def test_decision_offers_accept_draw_only_while_pending_and_sends_token(models):
     sent = []
-    request = TurnRequest("PROMPT", {"e2e4": "e4"}, draw_offered=True)
+    request = TurnRequest(PROMPT, {"e2e4": "e4"}, draw_offered=True)
     body = {"action": "accept_draw"}
     response = play(decision_player(models, answering(body, sent), token="tok"), request)
     assert response.answer == TurnAnswer(action="accept_draw")

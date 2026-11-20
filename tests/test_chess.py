@@ -177,14 +177,19 @@ def test_prompt_differs_between_sides_only_in_side_words():
         rejection='"Ke3" is not a legal move in this position',
     )
     black = PromptContext(**{**white.__dict__, "side": Side.SECOND})
-    white_words = re.findall(r"\w+", game.prompt(white))
-    black_words = re.findall(r"\w+", game.prompt(black))
-    assert len(white_words) == len(black_words)
-    differing = {(w, b) for w, b in zip(white_words, black_words, strict=True) if w != b}
-    assert differing == {("White", "Black"), ("Black", "White")}
+    for part in ("system", "user"):
+        white_words = re.findall(r"\w+", getattr(game.prompt(white), part))
+        black_words = re.findall(r"\w+", getattr(game.prompt(black), part))
+        assert len(white_words) == len(black_words)
+        differing = {(w, b) for w, b in zip(white_words, black_words, strict=True) if w != b}
+        assert differing == {("White", "Black"), ("Black", "White")}
 
 
-def test_prompt_sections_and_optional_parts():
+def sections(text: str) -> list[str]:
+    return re.findall(r"^[A-Z][A-Z ]+$", text, flags=re.MULTILINE)
+
+
+def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     state = game.new_state()
     ctx = PromptContext(
         side=Side.FIRST,
@@ -193,15 +198,23 @@ def test_prompt_sections_and_optional_parts():
         turn=1,
         max_turns=40,
     )
-    text = game.prompt(ctx)
-    headings = ["ROLE AND GOAL", "RULES", "POSITION", "LEGAL MOVES"]
-    assert [text.index(h) for h in headings] == sorted(text.index(h) for h in headings)
-    assert "playing a game of chess as White" in text and "win" in text
-    assert "move 1 of 40 (40 left" in text
-    assert "Nh3, Nf3" in text
-    assert "No draw offer is pending." in text
-    assert "PREVIOUS ATTEMPT" not in text and "$" not in text
+    prompt = game.prompt(ctx)
+    assert sections(prompt.system) == ["ROLE AND GOAL", "RULES"]
+    assert "playing a game of chess as White" in prompt.system and "win" in prompt.system
+    assert "at most 40 moves" in prompt.system
+    assert "FEN" not in prompt.system and "Nf3" not in prompt.system
+
+    assert sections(prompt.user) == ["POSITION", "LEGAL MOVES"]
+    assert "move 1 of 40 (40 left" in prompt.user
+    assert "Nh3, Nf3" in prompt.user
+    assert "No draw offer is pending." in prompt.user
+    assert "Unless you resign or accept a draw, choose exactly one move" in prompt.user
+    assert "referee" not in prompt.user.lower()
+    assert "$" not in prompt.system + prompt.user
+    assert prompt.text == f"{prompt.system}\n{prompt.user}"
 
     retry = game.prompt(PromptContext(**{**ctx.__dict__, "rejection": "illegal move Ke2"}))
-    assert retry.rstrip().endswith("Answer again with a legal move.")
-    assert "PREVIOUS ATTEMPT" in retry and "illegal move Ke2" in retry
+    assert retry.system == prompt.system
+    assert sections(retry.user) == ["POSITION", "LEGAL MOVES", "PREVIOUS ATTEMPT"]
+    assert retry.user.rstrip().endswith("Answer again with a legal move.")
+    assert "illegal move Ke2" in retry.user

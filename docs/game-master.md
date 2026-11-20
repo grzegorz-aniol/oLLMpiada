@@ -17,7 +17,7 @@ interface, so the game master, players and UI never import chess directly:
 
 | Member | Purpose |
 | --- | --- |
-| `name`, `prompt_template` | Identifier (the `--game` value) and the prompt template text (see [prompts](#prompts)) |
+| `name`, `system_template`, `user_template` | Identifier (the `--game` value) and the two prompt template texts (see [prompts](#prompts)) |
 | `new_state()` | Starting position |
 | `side_to_move(state)` | Which `Side` (`first` / `second`; for chess White / Black) moves |
 | `legal_moves(state)` | Legal moves as `{id: label}`: a stable machine id (UCI `e2e4`) and a readable label (SAN `e4`) |
@@ -28,7 +28,7 @@ interface, so the game master, players and UI never import chess directly:
 | `side_names` | Display names of the two sides (for chess `White`, `Black`), used in tables and summaries |
 | `render(state)` | Board for the terminal UI, as a Rich renderable |
 | `context(state, ...)` | The prompt context for the side to move: position, legal moves, turn, draw offer, rejection (implemented once in the base class) |
-| `prompt(context)` | The shared prompt, rendered from `prompt_template` (implemented once in the base class) |
+| `prompt(context)` | The shared `Prompt`: its `system` and `user` parts, rendered from the two templates (implemented once in the base class) |
 | `record(state, outcome, players)` | The game's native record saved with each game, and `record_extension` (for chess PGN, `pgn`) |
 
 - **Rule:** a new game adds one module under `games/`, its prompt text and one
@@ -47,8 +47,9 @@ interface, so the game master, players and UI never import chess directly:
 1. Build the turn context: game rules, side to move, position description, move
    history, legal moves, turn number and limit, a pending draw offer, and the
    reason the previous attempt was rejected (on a retry).
-2. Render the shared prompt from it (see [prompts](#prompts)) and send it to the
-   player through its adapter, which adds the answer format.
+2. Render the shared prompt from it, a system and a user part (see
+   [prompts](#prompts)), and send it to the player through its adapter, which
+   adds the answer format.
 3. Validate the answer (see [validation](#validation-and-retries)). On rejection,
    repeat from step 1 with the reason.
 4. Apply the action, record the move and its cost, publish an event.
@@ -75,35 +76,48 @@ characters) and the reason.
 
 ## Prompts
 
-- **Rule:** both players receive the same prompt text, built from one template.
-  The only differences are those the position dictates (own side, own turn) and
-  the answer format, which each player adapter appends.
+- **Rule:** both players receive the same prompt text, built from one pair of
+  templates. The only differences are those the position dictates (own side, own
+  turn) and the answer format, which each player adapter adds.
 - **Rule:** the prompt is written to make the model play to win: it states the
   goal (win; a draw beats a loss), that the opponent is another AI model, the
   stakes of each rule below, and asks the model to check its move against the
   legal list before answering.
+- **Decision:** the prompt has two parts. The **system** part holds what is true
+  for the whole game: role and goal, game rules and referee rules; the LLM adapter
+  adds its answer format to it. The **user** part holds only the turn at hand: the
+  current state and what to answer now. Models weigh system instructions as
+  standing rules, and the per-turn message stays short.
 
-Prompt sections, in order:
+System part, in order:
 
 1. **Role and goal** - which side the model plays and that it must try to win.
 2. **Rules** - the game rules in brief, plus the referee's rules: turn limit and
-   its result, illegal-answer limit and its penalty, how to resign, offer or accept
-   a draw.
-3. **Position** - move number, side to move, the board (for chess: FEN plus an
-   ASCII diagram with coordinates), full move history (SAN), the opponent's last
-   move, a pending draw offer, turns left.
-4. **Legal moves** - every legal move label. Both players get it, so it does not
-   favor either; it turns a test of rule recall into a test of play.
-5. **Previous attempt** (retries only) - the rejected answer and why.
+   its result, illegal-answer limit and its penalty, automatic draws, how to
+   resign, offer or accept a draw.
 
-Templates live next to their game as plain text files (`games/chess_prompt.txt`)
-so they can be reworded without code changes. They use `string.Template`
-placeholders: `$side`, `$opponent`, `$position`, `$legal_moves`, `$turn`,
-`$max_turns`, `$turns_left`, `$draw_offer` and `$previous_attempt` (empty except
-on retries). The draw-offer and previous-attempt sentences are worded in
-`Game.prompt` (`games/base.py`), because `string.Template` has no conditionals;
-the prompt version recorded with a competition must cover them too. Wording changes are recorded in the competition result so
-runs with different prompts are not compared by accident.
+User part, in order:
+
+1. **Position** - move number, side to move, the board (for chess: FEN plus an
+   ASCII diagram with coordinates), full move history (SAN), the opponent's last
+   move, this turn against the limit and turns left, a pending draw offer.
+2. **Legal moves** - every legal move label and the instruction to pick one. Both
+   players get it, so it does not favor either; it turns a test of rule recall
+   into a test of play.
+3. **Previous attempt** (retries only) - the rejected answer and why.
+
+Templates live next to their game as plain text files
+(`games/chess_system_prompt.txt`, `games/chess_user_prompt.txt`) so they can be
+reworded without code changes. Both use the same `string.Template` placeholders:
+`$side`, `$opponent`, `$position`, `$legal_moves`, `$turn`, `$max_turns`,
+`$turns_left`, `$draw_offer` and `$previous_attempt` (empty except on retries).
+The draw-offer and previous-attempt sentences are worded in `Game.prompt`
+(`games/base.py`), because `string.Template` has no conditionals.
+
+- **Rule:** the prompt version recorded with a competition covers both parts, the
+  wording in `Game.prompt` and the LLM answer format, so runs with different
+  prompts are not compared by accident. `prompt_version` in `competition.py`
+  hashes rendered sample prompts with the system/user boundary kept.
 
 ## Answer formats
 
@@ -121,11 +135,13 @@ class TurnAnswer(BaseModel):
     offer_draw: bool = False
 ```
 
-The chosen reasoning effort is mapped per API, as described in
-[model fields](configuration.md#model-fields). The adapter appends a short ANSWER
-FORMAT section naming the three fields, sets `request_timeout` from
-`OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the provider client's own retries, so
-the game master owns every retry. Without a token the `Authorization` header is
+The adapter sends the system part as PydanticAI `instructions` (a `system`
+message for OpenAI chat completions, the `system` field for Anthropic messages)
+with a short ANSWER FORMAT section naming the three fields appended, and the user
+part as the user prompt. The chosen reasoning effort is mapped per API, as
+described in [model fields](configuration.md#model-fields). The adapter sets
+`request_timeout` from `OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the provider
+client's own retries, so the game master owns every retry. Without a token the `Authorization` header is
 omitted per request (`extra_headers` with the SDK's `Omit`), because both the
 OpenAI and the Anthropic clients otherwise always send the key as a bearer token.
 Reasoning tokens are known when the model reports them (OpenAI
@@ -139,7 +155,8 @@ Reasoning tokens are known when the model reports them (OpenAI
   `PromptedOutput`; this may become a per-model config field.
 
 **Decision players** call the SystemOne API: `POST {model, state, questions}`,
-where `state` is the shared prompt text and every question is a `choice`:
+where `state` is the shared prompt text, system part then user part, and every
+question is a `choice`:
 
 | Question | Criteria |
 | --- | --- |
@@ -214,4 +231,4 @@ effort (see [configuration](configuration.md#model-fields)).
 
 Each finished game is written to the competition folder in `runs/` with its game
 record (PGN for chess), result, reason and per-move costs; the competition file holds the settings,
-prompt template version and totals.
+prompt version and totals.

@@ -23,8 +23,8 @@ from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, Turn
 # The first-run banner would print into the terminal UI.
 pydantic_ai.BANNER_ENABLED = False
 
+# Appended to the game's system prompt, which ends with a newline.
 ANSWER_FORMAT = """
-
 ANSWER FORMAT
 
 Answer with three fields: action (move, resign or accept_draw); move (your move
@@ -50,7 +50,10 @@ class LLMPlayer:
         start = time.perf_counter()
         with capture_run_messages() as messages:
             try:
-                answer = (await self._agent.run(request.prompt + ANSWER_FORMAT)).output
+                run = await self._agent.run(
+                    request.prompt.user, instructions=request.prompt.system + ANSWER_FORMAT
+                )
+                answer = run.output
             except UnexpectedModelBehavior as e:
                 format_error = _describe(e)
             except ModelAPIError as e:

@@ -2,6 +2,7 @@
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from string import Template
@@ -43,12 +44,26 @@ class PromptContext:
     rejection: str | None = None
 
 
+@dataclass(frozen=True)
+class Prompt:
+    """The shared prompt: game-wide rules (`system`) and the turn at hand (`user`)."""
+
+    system: str
+    user: str
+
+    @property
+    def text(self) -> str:
+        """Both parts as one text, for players that take a single input."""
+        return f"{self.system}\n{self.user}"
+
+
 class Game[S](ABC):
     """A two-player, turn-based, perfect-information game. States are never mutated."""
 
     name: str
     side_names: tuple[str, str]
-    prompt_template: str
+    system_template: str
+    user_template: str
     record_extension: str
 
     @abstractmethod
@@ -111,9 +126,9 @@ class Game[S](ABC):
             rejection=rejection,
         )
 
-    def prompt(self, ctx: PromptContext) -> str:
-        """Render the shared prompt; players append their own answer format."""
-        text = Template(self.prompt_template).substitute(
+    def prompt(self, ctx: PromptContext) -> Prompt:
+        """Render the shared prompt; players add their own answer format."""
+        values = dict(
             side=self.side_name(ctx.side),
             opponent=self.side_name(ctx.side.opponent),
             position=ctx.position,
@@ -134,4 +149,9 @@ class Game[S](ABC):
                 else ""
             ),
         )
-        return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
+        return Prompt(_render(self.system_template, values), _render(self.user_template, values))
+
+
+def _render(template: str, values: Mapping[str, object]) -> str:
+    text = Template(template).substitute(values)
+    return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"

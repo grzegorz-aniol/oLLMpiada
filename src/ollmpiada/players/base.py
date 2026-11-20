@@ -5,6 +5,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel
 
+from ollmpiada.games.base import Prompt
+
 Action = Literal["move", "resign", "accept_draw"]
 
 
@@ -18,7 +20,7 @@ class TurnAnswer(BaseModel):
 
 @dataclass(frozen=True)
 class TurnRequest:
-    prompt: str
+    prompt: Prompt
     legal_moves: dict[str, str]
     draw_offered: bool = False
 
