@@ -73,6 +73,27 @@ request (the CLI sends one on Ctrl+C).
   so a later front end (a web UI, for example) subscribes to the same events
   without changes to the runner.
 
+`Competition` in `competition.py` plays the games in order, each as an asyncio
+task, so `stop()` (Ctrl+C) cancels the game in progress, which is discarded: not
+listed, not saved, not counted. It publishes the game
+master's events plus `CompetitionProgress` (at the start and after every counted
+game) and `CompetitionFinished`; both carry the live `CompetitionState` (results,
+per-player `PlayerStats`, status `running`, `finished`, `aborted` or `stopped`).
+An aborted game ends the competition.
+
+Results go to `runs/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, rewritten after every game so a
+crash loses at most the game in progress:
+
+- `competition.json` - settings (game, players, games, max turns), the
+  `CompetitionState` fields, and `prompt_version`: a hash of a fully rendered
+  sample prompt, so it changes with the template and with the wording in code.
+- `game-NNN.<ext>` - the game's record (`.pgn` for chess), written for aborted
+  games too.
+- `game-NNN.json` - result, reason, side names and every turn with its attempts
+  (raw answer, time, tokens, rejection reason).
+
+`ollmpiada show` reads `competition.json` back with `load_state`.
+
 ### CLI and terminal UI
 
 argparse subcommands; Rich renders everything the user sees.
@@ -96,8 +117,9 @@ move list with rejected attempts.
   the mode. The exit
   code is 0 when the competition finished and non-zero when it was aborted or
   stopped.
-- Ctrl+C stops the competition: the game in progress is aborted and not counted,
-  finished games stay saved, and the competition status becomes `stopped`.
+- Ctrl+C stops the competition: the game in progress is discarded (not listed or
+  counted), finished games stay saved, and the competition status becomes
+  `stopped`.
 
 ## Code map
 
