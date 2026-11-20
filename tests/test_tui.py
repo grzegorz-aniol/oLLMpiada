@@ -2,18 +2,20 @@ import asyncio
 import json
 import os
 import signal
+from datetime import datetime, timedelta
 
 import chess
 import pytest
 from rich.console import Console
+from rich.live import Live
 
 from ollmpiada.cli import main
-from ollmpiada.competition import Competition
-from ollmpiada.game_master import GameStarted, MoveMade
+from ollmpiada.competition import Competition, CompetitionFinished, CompetitionProgress
+from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade
 from ollmpiada.games.base import Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
-from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse
+from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
 from ollmpiada.tui import LiveView, stats_table
 from tests.fakes import ScriptedPlayer
 
@@ -130,6 +132,32 @@ def test_run_in_a_terminal_uses_the_live_view(scripted, monkeypatch, capsys):
     assert "Statistics" in out and "game 1:" not in out
 
 
+def test_live_view_refreshes_while_a_model_thinks(scripted, monkeypatch, capsys):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setattr("ollmpiada.cli.REFRESH_S", 0)
+    thinking = False
+    refreshed_while_thinking = []
+    play, refresh = ScriptedPlayer.play, Live.refresh
+
+    async def slow_play(self, request):
+        nonlocal thinking
+        thinking = True
+        for _ in range(3):
+            await asyncio.sleep(0)
+        thinking = False
+        return await play(self, request)
+
+    def recording_refresh(self):
+        refreshed_while_thinking.append(thinking)
+        refresh(self)
+
+    monkeypatch.setattr(ScriptedPlayer, "play", slow_play)
+    monkeypatch.setattr(Live, "refresh", recording_refresh)
+    scripted.update({"local-llm": [RESIGN], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini", "--games", "1"]) == 0
+    assert any(refreshed_while_thinking)
+
+
 def test_run_states_the_side_imbalance_of_an_odd_number_of_games(scripted, capsys):
     scripted.update({"local-llm": [RESIGN, RESIGN, RESIGN], "basal-mini": ["e4"]})
     assert main(["run", "local-llm", "basal-mini", "--games", "3"]) == 0
@@ -215,7 +243,7 @@ def test_live_view_background_mode_has_no_board(tmp_path):
     view = LiveView(ChessGame(), visual=False)
     play_into(view, tmp_path, FIRST_SCRIPT, SECOND_SCRIPT)
     text = render(view)
-    assert "♛" not in text and "(1) f3" not in text
+    assert "♛" not in text and "(1) f3" not in text and "Requests" not in text
     assert "Games 2 of 2 | finished" in text and "resignation" in text
 
 
@@ -250,3 +278,110 @@ def test_unreported_reasoning_is_shown_as_unknown(tmp_path):
     stats.input_tokens, stats.output_tokens = 12_345, 67
     a_row = next(line for line in render(stats_table(state)).splitlines() if "model-a" in line)
     assert "12.3k / 67 / ?" in a_row
+
+
+# --- game statistics under the board ---
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 11, 20, 14, 3, 12)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+def row(lines: list[str], player: str) -> list[str]:
+    """The player's row in the game statistics: side name, then player name."""
+    return next(line.split() for line in lines if line.split()[1:2] == [player])
+
+
+def started_game(tmp_path, clock):
+    """A visual live view whose game 1 has just started, driven by events, not a competition."""
+    players = (ScriptedPlayer("model-a", []), ScriptedPlayer("model-b", []))
+    state = Competition(
+        ChessGame(), players, games=1, max_turns=20, runs_dir=tmp_path / "runs"
+    ).state
+    view = LiveView(ChessGame(), visual=True, clock=clock)
+    view.handle(CompetitionProgress(state))
+    view.handle(GameStarted(1, ("model-a", "model-b"), chess.Board()))
+    return view, state
+
+
+def after(*moves: str) -> chess.Board:
+    board = chess.Board()
+    for move in moves:
+        board.push_san(move)
+    return board
+
+
+def test_game_stats_show_timers_moves_thinker_and_usage_under_the_board(tmp_path):
+    clock = FakeClock()
+    view, _ = started_game(tmp_path, clock)
+    clock.advance(5)
+    view.handle(AnswerReceived(1, Side.FIRST, "model-a", 5.0, Usage(120, 30, 7)))
+    view.handle(MoveMade(1, Side.FIRST, "model-a", "e4", after("e4"), draw_offered=False))
+    clock.advance(7)
+    lines = render(view).splitlines()
+    board_bottom = next(i for i, line in enumerate(lines) if line.startswith("1 "))
+    stats = next(i for i, line in enumerate(lines) if line.startswith("Started"))
+    results = next(i for i, line in enumerate(lines) if "Results" in line)
+    assert board_bottom < stats < results
+    assert lines[stats] == (
+        "Started 14:03:12, running 0:12 | 1 move completed | Black model-b thinking 0:07"
+    )
+    assert row(lines, "model-a") == ["White", "model-a", "1", "120", "30", "7"]
+    assert row(lines, "model-b") == ["Black", "model-b", "0", "–", "–", "–"]
+
+    clock.advance(60)
+    assert "running 1:12 | 1 move completed | Black model-b thinking 1:07" in render(view)
+
+
+def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_path):
+    clock = FakeClock()
+    view, _ = started_game(tmp_path, clock)
+    view.handle(AnswerReceived(1, Side.FIRST, "model-a", 3.0, None))
+    clock.advance(3)
+    view.handle(AnswerReceived(1, Side.FIRST, "model-a", 4.0, Usage(100, 10, 0)))
+    clock.advance(4)
+    assert "White model-a thinking 0:07" in render(view)
+    view.handle(MoveMade(1, Side.FIRST, "model-a", "e4", after("e4"), draw_offered=False))
+    clock.advance(2)
+    view.handle(MoveMade(1, Side.SECOND, "model-b", "e5", after("e4", "e5"), draw_offered=False))
+    clock.advance(1)
+    lines = render(view).splitlines()
+    assert any("2 moves completed | White model-a thinking 0:01" in line for line in lines)
+    # One of the two answers reported no usage, so the totals are lower bounds.
+    assert row(lines, "model-a") == ["White", "model-a", "2", "≥", "100", "≥", "10", "≥", "0"]
+
+
+def test_game_stats_never_show_unreported_reasoning_as_zero(tmp_path):
+    view, _ = started_game(tmp_path, FakeClock())
+    view.handle(AnswerReceived(1, Side.FIRST, "model-a", 1.0, Usage(100, 10, None)))
+    assert row(render(view).splitlines(), "model-a") == ["White", "model-a", "1", "100", "10", "–"]
+
+
+def test_game_stats_freeze_when_the_game_ends(tmp_path):
+    clock = FakeClock()
+    view = LiveView(ChessGame(), visual=True, clock=clock)
+    play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Qh4#"], games=1)
+    clock.advance(30)
+    lines = render(view).splitlines()
+    assert "Started 14:03:12, ended after 0:00 | 4 moves completed" in lines
+    assert not any("thinking" in line for line in lines)
+    assert row(lines, "model-a") == ["White", "model-a", "3", "300", "30", "0"]
+    assert row(lines, "model-b") == ["Black", "model-b", "2", "200", "20", "0"]
+
+
+def test_game_stats_of_a_stopped_game_stop_ticking(tmp_path):
+    clock = FakeClock()
+    view, state = started_game(tmp_path, clock)
+    clock.advance(9)
+    state.status = "stopped"
+    view.handle(CompetitionFinished(state))
+    clock.advance(30)
+    text = render(view)
+    assert "ended after 0:09 | 0 moves completed" in text and "thinking" not in text

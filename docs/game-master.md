@@ -56,7 +56,10 @@ interface, so the game master, players and UI never import chess directly:
    sides.
 
 `play_game` in `game_master.py` runs this loop and publishes `GameStarted`,
-`MoveMade`, `AnswerRejected` and `GameFinished` events to a callback. Its
+`AnswerReceived`, `MoveMade`, `AnswerRejected` and `GameFinished` events to a
+callback. `AnswerReceived` comes for every answered model call, before
+validation, with its time and usage, so a live view can count a game's requests
+and tokens while it runs, resignations and rejected answers included. Its
 `GameResult` holds the outcome (or the error of an aborted game), the final state
 and one `Turn` per answered turn with every attempt's raw answer, time, tokens and
 rejection reason; an aborted game keeps the attempts of its unfinished turn as

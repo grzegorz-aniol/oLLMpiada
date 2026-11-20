@@ -109,19 +109,33 @@ argparse subcommands; Rich renders everything the user sees.
 A model is named `<id>@<effort>`, as in
 [model fields](configuration.md#model-fields). `run` checks the models and efforts
 before anything starts, then shows a Rich
-`Live` view: status line (games done of total, current game and turn), results
-table, statistics table per player and, in visual mode, the game's board with the
-move list above it. The move list is one wrapped line numbered by move pair,
+`Live` view: status line (games done of total, current game and turn), in visual
+mode the game's board with the move list above it and the game statistics below
+it, then the results table and the statistics table per player. The move list is
+one wrapped line numbered by move pair,
 `(1) e4 e5 (2) Nf3 Nc6`, with rejected attempts inline in red as
 `[✗ <attempt>: <reason>]`. It keeps a fixed height and shows its most recent
 lines, so the board never moves or gets pushed off.
+
+The game statistics cover the current game: when it started (wall clock) and how
+long it has run, the number of moves completed, who is thinking (side and
+player, the side to move) and for how long, and per player the requests (answered
+model calls, counted as in the statistics) and the input, output and reasoning
+tokens. The thinking timer covers the whole turn,
+retries included, and restarts with each move. Token counts not reported show as
+`–`, never as zero, and as `≥ n` when only some answers reported them. When the
+game ends or the competition stops, the timers freeze and the thinking part
+disappears.
 
 Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
 two players must have different names, because statistics are kept per name; to
 let a model play itself, give the two sides different efforts. `tui.py` holds the
 renderers: `LiveView` (subscribes to runner events; the CLI refreshes Rich `Live`
-after each event, with no refresh thread, and routes log warnings through the
-same console so they print above the view), `results_table`, `stats_table`, `summary_lines` (status, totals
+after each event and once a second from the event loop, with no refresh thread,
+so timers tick while a model thinks but a render never interleaves with an event
+update; timers are computed at render time from the view's `clock`, which tests
+replace; log warnings go through the same console so they print above the view),
+`results_table`, `stats_table`, `summary_lines` (status, totals
 and the odd-game imbalance) and `PlainOutput`. `show` reuses the same tables.
 
 - **Rule:** `run` is scriptable. When stdout is not a terminal it prints one plain

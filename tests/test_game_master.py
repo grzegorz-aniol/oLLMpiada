@@ -4,6 +4,7 @@ import chess
 import pytest
 
 from ollmpiada.game_master import (
+    AnswerReceived,
     AnswerRejected,
     GameFinished,
     GameStarted,
@@ -13,7 +14,7 @@ from ollmpiada.game_master import (
 from ollmpiada.games.base import Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TransportError, TurnAnswer
-from tests.fakes import ScriptedPlayer, unreadable
+from tests.fakes import USAGE, ScriptedPlayer, unreadable
 
 RESIGN = TurnAnswer(action="resign")
 ACCEPT = TurnAnswer(action="accept_draw")
@@ -186,11 +187,23 @@ def test_events_and_turn_records():
     events = []
     result, _, _ = run(["f3", "g4"], ["e5", "Qh4#"], events=events)
     kinds = [type(e) for e in events]
-    assert kinds == [GameStarted, MoveMade, MoveMade, MoveMade, MoveMade, GameFinished]
+    answered = [AnswerReceived, MoveMade]
+    assert kinds == [GameStarted, *answered * 4, GameFinished]
     assert events[0].players == ("white-model", "black-model") and events[0].number == 3
-    last = events[4]
+    last = events[8]
     assert (last.side, last.player, last.move) == (Side.SECOND, "black-model", "Qh4#")
     assert last.state.is_checkmate()
     assert result.state.is_checkmate()
     attempt = result.turns[0].attempts[0]
     assert attempt.elapsed_s == 1.0 and attempt.usage.input_tokens == 100
+
+
+def test_every_answer_is_published_with_its_usage_before_validation():
+    events = []
+    error = TransportError("timeout")
+    run([error, "Ke2", unreadable(), RESIGN], [], events=events)
+    answers = [e for e in events if isinstance(e, AnswerReceived | AnswerRejected)]
+    assert [type(e) for e in answers] == [AnswerReceived, AnswerRejected] * 2 + [AnswerReceived]
+    received = answers[0]
+    assert (received.number, received.side, received.player) == (3, Side.FIRST, "white-model")
+    assert (received.elapsed_s, received.usage) == (1.0, USAGE)

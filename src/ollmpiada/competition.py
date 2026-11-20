@@ -13,7 +13,7 @@ from typing import Literal
 
 from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game
 from ollmpiada.games.base import Game, Side
-from ollmpiada.players.base import Player
+from ollmpiada.players.base import Player, Usage
 
 Status = Literal["running", "finished", "aborted", "stopped"]
 
@@ -41,6 +41,10 @@ class PlayerStats:
     def tokens_known(self) -> bool:
         return self.calls > self.calls_without_usage
 
+    @property
+    def reasoning_known(self) -> bool:
+        return self.calls - self.calls_without_usage > self.calls_without_reasoning
+
     def add(self, result: GameResult) -> None:
         """Count one finished game."""
         assert result.outcome is not None
@@ -57,18 +61,22 @@ class PlayerStats:
                 continue
             self.moves += turn.action == "move"
             for attempt in turn.attempts:
-                self.calls += 1
-                self.thinking_s += attempt.elapsed_s
+                self.add_call(attempt.elapsed_s, attempt.usage)
                 self.illegal_attempts += attempt.rejection is not None
-                if attempt.usage is None:
-                    self.calls_without_usage += 1
-                else:
-                    self.input_tokens += attempt.usage.input_tokens
-                    self.output_tokens += attempt.usage.output_tokens
-                    if attempt.usage.reasoning_tokens is None:
-                        self.calls_without_reasoning += 1
-                    else:
-                        self.reasoning_tokens += attempt.usage.reasoning_tokens
+
+    def add_call(self, elapsed_s: float, usage: Usage | None) -> None:
+        """Count one answered model call, accepted or rejected."""
+        self.calls += 1
+        self.thinking_s += elapsed_s
+        if usage is None:
+            self.calls_without_usage += 1
+            return
+        self.input_tokens += usage.input_tokens
+        self.output_tokens += usage.output_tokens
+        if usage.reasoning_tokens is None:
+            self.calls_without_reasoning += 1
+        else:
+            self.reasoning_tokens += usage.reasoning_tokens
 
 
 @dataclass(frozen=True)

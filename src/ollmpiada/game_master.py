@@ -61,6 +61,17 @@ class GameStarted:
 
 
 @dataclass(frozen=True)
+class AnswerReceived:
+    """Every answered model call, published before the answer is validated."""
+
+    number: int
+    side: Side
+    player: str
+    elapsed_s: float
+    usage: Usage | None
+
+
+@dataclass(frozen=True)
 class MoveMade:
     number: int
     side: Side
@@ -85,7 +96,7 @@ class GameFinished:
     result: GameResult
 
 
-Event = GameStarted | MoveMade | AnswerRejected | GameFinished
+Event = GameStarted | AnswerReceived | MoveMade | AnswerRejected | GameFinished
 
 
 def _ignore(event: Event) -> None:
@@ -134,6 +145,7 @@ async def play_game[S](
                 result.state = state
                 publish(GameFinished(result))
                 return result
+            publish(AnswerReceived(number, side, player.name, response.elapsed_s, response.usage))
             try:
                 accepted = _validate(game, state, response, draw_offered)
                 attempts.append(Attempt(response.raw, response.elapsed_s, response.usage))

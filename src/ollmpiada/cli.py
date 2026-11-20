@@ -23,6 +23,7 @@ from ollmpiada.players.base import Player, TransportError, TurnRequest
 from ollmpiada.tui import LiveView, PlainOutput, results_table, stats_table, summary_lines
 
 DEFAULT_MAX_TURNS = 100
+REFRESH_S = 1.0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,7 +155,7 @@ def _run(
     game = GAMES[args.game]
     if console.is_terminal:
         view = LiveView(game, visual=args.mode == "visual")
-        # Refreshing from events (no refresh thread) never renders a board mid-update.
+        # Refreshing from the event loop (no refresh thread) never renders a board mid-update.
         with Live(view, console=console, auto_refresh=False) as live, _log_to(console):
 
             def publish(event: CompetitionEvent) -> None:
@@ -162,7 +163,7 @@ def _run(
                 live.refresh()
 
             competition = _competition(game, players, args, settings, publish)
-            state = asyncio.run(_play(competition))
+            state = asyncio.run(_play(competition, tick=live.refresh))
     else:
         plain = PlainOutput(console)
         competition = _competition(game, players, args, settings, plain.handle)
@@ -191,14 +192,28 @@ def _competition(
     )
 
 
-async def _play(competition: Competition) -> CompetitionState:
-    """Run with Ctrl+C mapped to a stop request instead of KeyboardInterrupt."""
+async def _play(
+    competition: Competition, tick: Callable[[], None] | None = None
+) -> CompetitionState:
+    """Run with Ctrl+C mapped to a stop request instead of KeyboardInterrupt.
+
+    `tick` runs every `REFRESH_S` seconds, so live timers move while a model thinks.
+    """
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, competition.stop)
+    ticker = asyncio.create_task(_every(REFRESH_S, tick)) if tick else None
     try:
         return await competition.run()
     finally:
+        if ticker:
+            ticker.cancel()
         loop.remove_signal_handler(signal.SIGINT)
+
+
+async def _every(seconds: float, action: Callable[[], None]) -> None:
+    while True:
+        await asyncio.sleep(seconds)
+        action()
 
 
 def _show(console: Console, run_dir: Path) -> int:

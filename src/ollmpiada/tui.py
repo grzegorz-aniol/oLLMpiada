@@ -1,9 +1,11 @@
 """What the user sees: Rich live view, results and statistics tables, plain lines for scripts."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from rich import box
-from rich.console import Console, ConsoleOptions, RenderResult
+from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.table import Column, Table
 from rich.text import Text
 
@@ -15,13 +17,20 @@ from ollmpiada.competition import (
     GameSummary,
     PlayerStats,
 )
-from ollmpiada.game_master import AnswerRejected, GameFinished, GameStarted, MoveMade
+from ollmpiada.game_master import (
+    AnswerReceived,
+    AnswerRejected,
+    GameFinished,
+    GameStarted,
+    MoveMade,
+)
 from ollmpiada.games.base import Game, Side
 
 # The move list keeps this height, so the board below it never moves.
 MOVE_LIST_LINES = 4
 COMPACT = {"box": box.SIMPLE_HEAD, "collapse_padding": True}
 REASON_SHOWN = 60
+UNKNOWN = "–"
 
 
 def results_table(state: CompetitionState) -> Table:
@@ -61,14 +70,30 @@ def _tokens(s: PlayerStats) -> str:
     """Unknown counts are never shown as zero; `≥` marks totals some calls did not report."""
     if not s.tokens_known:
         return "unknown"
-    reported = s.calls - s.calls_without_usage
-    reasoning = "?" if s.calls_without_reasoning == reported else _count(s.reasoning_tokens)
+    reasoning = _count(s.reasoning_tokens) if s.reasoning_known else "?"
     text = f"{_count(s.input_tokens)} / {_count(s.output_tokens)} / {reasoning}"
     return f"≥ {text}" if s.calls_without_usage else text
 
 
 def _count(tokens: int) -> str:
     return f"{tokens / 1000:.1f}k" if tokens >= 10_000 else str(tokens)
+
+
+def _token_cells(s: PlayerStats) -> tuple[str, str, str]:
+    """Input, output and reasoning tokens, each `–` when unknown and `≥` when partly reported."""
+    if not s.tokens_known:
+        return UNKNOWN, UNKNOWN, UNKNOWN
+    partly = "≥ " if s.calls_without_usage else ""
+    reasoning = UNKNOWN
+    if s.reasoning_known:
+        reasoning = ("≥ " if s.calls_without_reasoning else partly) + _count(s.reasoning_tokens)
+    return partly + _count(s.input_tokens), partly + _count(s.output_tokens), reasoning
+
+
+def _duration(elapsed: timedelta) -> str:
+    minutes, secs = divmod(int(elapsed.total_seconds()), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
 def summary_lines(state: CompetitionState) -> list[str]:
@@ -97,35 +122,66 @@ def game_line(summary: GameSummary, side_names: tuple[str, str]) -> str:
 
 
 @dataclass
+class GameStats:
+    """Times and per-player statistics of the current game, shown under the board."""
+
+    players: tuple[str, str]
+    stats: dict[str, PlayerStats]
+    started_at: datetime
+    turn_started_at: datetime
+    ended_at: datetime | None = None
+
+
+@dataclass
 class LiveView:
-    """Rich renderable fed by runner events; the CLI refreshes Live after each event."""
+    """Rich renderable fed by runner events; the CLI refreshes Live after each event and
+    periodically, so timers, computed at render time from `clock`, tick between events."""
 
     game: Game
     visual: bool
+    clock: Callable[[], datetime] = datetime.now
     state: CompetitionState | None = None
     current: int | None = None
     turn: int = 0
     board: object = None
     moves: Text = field(default_factory=Text)
     numbered_turn: int = -1
+    game_stats: GameStats | None = None
 
     def handle(self, event: CompetitionEvent) -> None:
         match event:
-            case GameStarted(number=number, state=board):
+            case GameStarted(number=number, players=players, state=board):
                 self.current, self.turn, self.board = number, 0, board
                 self.moves, self.numbered_turn = Text(), -1
+                now = self.clock()
+                stats = {name: PlayerStats(name) for name in players}
+                self.game_stats = GameStats(players, stats, now, now)
+            case AnswerReceived(player=player, elapsed_s=elapsed_s, usage=usage):
+                assert self.game_stats is not None
+                self.game_stats.stats[player].add_call(elapsed_s, usage)
             case MoveMade(side=side, move=move, state=board, draw_offered=offered):
                 self._note(side, move + (" (offers draw)" if offered else ""))
                 self.turn += 1
                 self.board = board
+                assert self.game_stats is not None
+                self.game_stats.turn_started_at = self.clock()
             case AnswerRejected(side=side, reason=reason, attempt=attempt):
                 reason = " ".join(reason.split())
                 reason = reason if len(reason) <= REASON_SHOWN else reason[:REASON_SHOWN] + "..."
                 self._note(side, f"[✗ {attempt}: {reason}]", style="red")
             case GameFinished():
                 self.current = None
-            case CompetitionProgress(state=state) | CompetitionFinished(state=state):
+                self._end_game()
+            case CompetitionProgress(state=state):
                 self.state = state
+            case CompetitionFinished(state=state):
+                # A stopped game publishes no GameFinished, so its timers stop here.
+                self.state = state
+                self._end_game()
+
+    def _end_game(self) -> None:
+        if self.game_stats is not None and self.game_stats.ended_at is None:
+            self.game_stats.ended_at = self.clock()
 
     def _note(self, side: Side, entry: str, style: str = "") -> None:
         """Append to the flowing move list, numbering each pair before its first entry."""
@@ -141,6 +197,35 @@ class LiveView:
         padding = [Text()] * (MOVE_LIST_LINES - len(lines))
         return Text("\n").join(padding + lines)
 
+    def _game_stats_view(self, g: GameStats) -> Group:
+        """Timers, move count, who is thinking and per-player usage of the current game."""
+        now = self.clock()
+        running = "running" if g.ended_at is None else "ended after"
+        length = _duration((g.ended_at or now) - g.started_at)
+        line = Text(
+            f"Started {g.started_at:%H:%M:%S}, {running} {length}"
+            f" | {self.turn} move{'' if self.turn == 1 else 's'} completed"
+        )
+        if g.ended_at is None:
+            # Retries keep the clock running: it times the whole turn, not one request.
+            index = 0 if self.game.side_to_move(self.board) is Side.FIRST else 1
+            line.append(
+                f" | {self.game.side_names[index]} {g.players[index]} thinking "
+                + _duration(now - g.turn_started_at),
+                style="bold",
+            )
+        numbers = ("Requests", "Tokens in", "Tokens out", "Reasoning")
+        table = Table(
+            "Side",
+            Column("Player", overflow="fold"),
+            *(Column(header, no_wrap=True) for header in numbers),
+            **COMPACT,
+        )
+        for side_name, name in zip(self.game.side_names, g.players, strict=True):
+            stats = g.stats[name]
+            table.add_row(side_name, name, str(stats.calls), *_token_cells(stats))
+        return Group(line, table)
+
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         if self.state is None:
             yield Text("Starting...")
@@ -154,6 +239,8 @@ class LiveView:
         if self.visual and self.board is not None:
             yield self._move_list(console, options.max_width)
             yield self.game.render(self.board)
+            if self.game_stats is not None:
+                yield self._game_stats_view(self.game_stats)
         yield results_table(self.state)
         yield stats_table(self.state)
 
