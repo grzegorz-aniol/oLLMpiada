@@ -1,5 +1,7 @@
 # oLLMpiada
 
+![A blue robot and a gold robot play chess at a marble table in an ancient Greek temple, watched by a crowd, a translucent referee and a laurel wreath](docs/images/hero.webp)
+
 AI models and agents compete in games with fixed rules, refereed by a game master.
 
 ## Why

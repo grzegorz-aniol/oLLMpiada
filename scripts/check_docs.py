@@ -1,5 +1,8 @@
 """Check the docs/ knowledge base: reachability, links, anchors, related frontmatter.
 
+Links and images in the repository README.md are checked too; it is the entry point
+outside docs/, so it counts for neither reachability nor size.
+
 Policy lives in docs/README.md ("Maintaining this knowledge base"). Exits 1 on errors;
 size warnings never fail. Standard library only: `uv run python scripts/check_docs.py`.
 """
@@ -10,7 +13,9 @@ from pathlib import Path
 
 DOCS = (Path(__file__).resolve().parent.parent / "docs").resolve()
 ROOT_INDEX = DOCS / "README.md"
-LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+REPO_README = DOCS.parent / "README.md"
+# Matches images too: their targets must exist, but only .md targets become graph edges.
+LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 EXTERNAL = re.compile(r"^[a-z][a-z0-9+.-]*:")
 HUB_MAX, LEAF_MAX = 80, 300
@@ -58,12 +63,12 @@ def parse_related(value: str) -> list[str]:
     return [item.strip().strip("\"'") for item in value.strip("[]").split(",") if item.strip()]
 
 
-def check_file(
-    path: Path, meta: dict[str, str], body: str, anchors: dict[Path, set[str]]
-) -> tuple[set[Path], list[str], list[str]]:
-    """Check one document; return the documents it links to, errors and warnings."""
+def check_links(
+    path: Path, body: str, anchors: dict[Path, set[str]]
+) -> tuple[set[Path], list[str]]:
+    """Check one file's links and images; return the documents it links to and errors."""
     name = path.relative_to(DOCS.parent)
-    linked, errors, warnings = set(), [], []
+    linked, errors = set(), []
     for target in LINK.findall(strip_code(body)):
         if EXTERNAL.match(target) or target.startswith("/"):
             continue
@@ -78,6 +83,16 @@ def check_file(
             linked.add(dest)
             if anchor and anchor.lower() not in anchors[dest]:
                 errors.append(f"{name}: missing anchor -> {target}")
+    return linked, errors
+
+
+def check_file(
+    path: Path, meta: dict[str, str], body: str, anchors: dict[Path, set[str]]
+) -> tuple[set[Path], list[str], list[str]]:
+    """Check one document; return the documents it links to, errors and warnings."""
+    name = path.relative_to(DOCS.parent)
+    linked, errors = check_links(path, body, anchors)
+    warnings = []
     for rel in parse_related(meta.get("related", "")):
         if not (path.parent / rel).resolve().is_file():
             errors.append(f"{name}: related entry does not resolve -> {rel}")
@@ -115,6 +130,7 @@ def main() -> int:
         edges[path], file_errors, file_warnings = check_file(path, meta, body, anchors)
         errors += file_errors
         warnings += file_warnings
+    errors += check_links(REPO_README, REPO_README.read_text(encoding="utf-8"), anchors)[1]
 
     reachable = reachable_from(ROOT_INDEX, edges)
     for path in docs:

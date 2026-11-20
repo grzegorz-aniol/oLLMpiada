@@ -20,7 +20,8 @@ uv run pytest tests/test_x.py -k name   # one test
 - **Unit** - `tests/`, no network or external services; fast enough to run on
   every change.
 - **Documentation** - `tests/test_docs.py` runs `scripts/check_docs.py`, so broken
-  links and orphaned documents fail the suite.
+  links and images (in `docs/` and the repository `README.md`) and orphaned
+  documents fail the suite.
 
 - **Rule: no real models in tests.** Game master, competition and UI tests use
   scripted fake players that return prepared answers (legal moves, illegal moves,

@@ -168,3 +168,4 @@ Planned layout; replace this note with real entries as the modules land.
   plain output for scripts.
 - `config/models.json` - providers and models.
 - `runs/` - competition results, gitignored.
+- `docs/images/` - images for the README and docs, as WebP sized for the page.
