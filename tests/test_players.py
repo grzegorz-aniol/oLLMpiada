@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import json
+from types import SimpleNamespace
 
 import httpx
 import httpx2
@@ -12,7 +13,7 @@ from pydantic_ai.usage import RequestUsage
 
 from ollmpiada.config import load_models
 from ollmpiada.games.base import Prompt
-from ollmpiada.players import PlayerError, create_player, resolve_player
+from ollmpiada.players import PlayerError, create_player, decision, resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
 from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player
@@ -354,10 +355,14 @@ def test_llm_anthropic_http_error_is_a_transport_error(models):
 # --- decision player ---
 
 
-def decision_player(models, handler, model_id="basal-mini", token=None):
+def decision_player(models, handler, model_id="basal-mini", token=None, max_options=None):
     model = models[model_id]
     if token:
         model = dataclasses.replace(model, token=token)
+    if max_options:
+        model = dataclasses.replace(
+            model, spec=model.spec.model_copy(update={"max_options": max_options})
+        )
     return DecisionPlayer("d", model, timeout_s=5, transport=httpx.MockTransport(handler))
 
 
@@ -476,6 +481,162 @@ def test_decision_connection_error_is_a_transport_error(models):
 
     with pytest.raises(TransportError, match="ConnectError"):
         play(decision_player(models, handler))
+
+
+# --- decision player: moves split over several questions ---
+
+# 30 moves from six origin squares, inserted out of order.
+MANY_MOVES = {f"{f}1{f}{r}": f"{f.upper()}{r}" for f in "fedcba" for r in range(2, 7)}
+
+
+def scripted(bodies, sent):
+    """Answers each query with the next body and records the questions it asked."""
+    replies = iter(bodies)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["questions"])
+        return httpx.Response(200, json=next(replies))
+
+    return handler
+
+
+def many_request(moves=MANY_MOVES):
+    return TurnRequest(PROMPT, moves)
+
+
+def test_decision_splits_moves_equally_and_other_lists_the_unlisted_moves(models):
+    sent = []
+    bodies = [
+        {"action": "move", "move": "other", "offer_draw": "yes"},
+        {"move": "f1f6"},
+    ]
+    player = decision_player(models, scripted(bodies, sent), max_options=26)
+    response = play(player, many_request())
+    assert response.answer == TurnAnswer(action="move", move="f1f6", offer_draw=True)
+
+    first, second = sent
+    assert set(first) == {"action", "move", "offer_draw"} and set(second) == {"move"}
+    first_moves = first["move"]["criteria"]
+    second_moves = second["move"]["criteria"]
+    other = first_moves.pop("other")
+    assert "other" not in second_moves
+    assert len(first_moves) == len(second_moves) == 15
+    # Sorted ids keep each origin square's moves adjacent.
+    assert list(first_moves) + list(second_moves) == sorted(MANY_MOVES)
+    assert other.endswith(", ".join(second_moves.values()))
+    assert not any(label in other for label in first_moves.values())
+
+
+def test_decision_fitting_moves_are_one_question(models):
+    sent = []
+    body = {"action": "move", "move": "a1a2", "offer_draw": "no"}
+    player = decision_player(models, scripted([body], sent), max_options=30)
+    response = play(player, many_request())
+    assert response.answer == TurnAnswer(action="move", move="a1a2")
+    assert len(sent) == 1 and sent[0]["move"]["criteria"] == MANY_MOVES
+
+
+def test_decision_split_rejects_a_move_id_equal_to_other(models):
+    moves = {**MANY_MOVES, "other": "Other"}
+    player = decision_player(models, scripted([], []), max_options=26)
+    with pytest.raises(ValueError, match="'other'"):
+        play(player, many_request(moves))
+
+
+@pytest.mark.parametrize("max_options", [2, 3, 7, 26])
+def test_decision_other_chain_reaches_the_last_group_within_limits(models, max_options):
+    for count in range(max_options + 1, 4 * max_options + 2):
+        moves = {f"m{i:03}": f"move {i}" for i in range(count)}
+        sent = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            questions = json.loads(request.content)["questions"]
+            sent.append(questions["move"]["criteria"])
+            choice = "other" if "other" in sent[-1] else next(iter(sent[-1]))
+            return httpx.Response(200, json={"action": "move", "move": choice, "offer_draw": "no"})
+
+        player = decision_player(models, handler, max_options=max_options)
+        response = play(player, many_request(moves))
+
+        groups = [[m for m in criteria if m != "other"] for criteria in sent]
+        assert response.answer == TurnAnswer(action="move", move=groups[-1][0])
+        assert [m for group in groups for m in group] == sorted(moves)
+        assert all(2 <= len(criteria) <= max_options for criteria in sent)
+        assert ["other" in criteria for criteria in sent] == [True] * (len(sent) - 1) + [False]
+        # `other` lists every move outside its group, earlier and later ones alike.
+        for criteria, group in zip(sent[:-1], groups, strict=False):
+            outside = [moves[m] for m in sorted(moves) if m not in group]
+            expected = "A move not listed in this question: " + ", ".join(outside)
+            assert criteria["other"] == expected
+        assert max(map(len, groups)) - min(map(len, groups)) <= 1
+        # The fewest queries: one group less could not hold every move.
+        assert (len(sent) - 2) * (max_options - 1) + max_options < count
+
+
+def test_decision_resign_asks_no_further_move_question(models):
+    sent = []
+    player = decision_player(models, scripted([{"action": "resign"}], sent), max_options=26)
+    response = play(player, many_request())
+    assert response.answer == TurnAnswer(action="resign")
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("max_options", [None, 26])
+def test_decision_single_legal_move_is_played_without_a_move_question(models, max_options):
+    sent = []
+    body = {"action": "move", "offer_draw": "yes"}
+    player = decision_player(models, scripted([body], sent), max_options=max_options)
+    response = play(player, TurnRequest(PROMPT, {"e1f1": "Kf1"}))
+    assert response.answer == TurnAnswer(action="move", move="e1f1", offer_draw=True)
+    assert set(sent[0]) == {"action", "offer_draw"}
+
+
+def test_decision_split_sums_time_usage_and_raw_text(models, monkeypatch):
+    clock = iter([0.0, 1.5, 10.0, 10.25])
+    # Only the decision module's clock: httpx reads the global one.
+    monkeypatch.setattr(decision, "time", SimpleNamespace(perf_counter=lambda: next(clock)))
+    bodies = [
+        {
+            "action": "move",
+            "move": "other",
+            "offer_draw": "no",
+            "usage": {"prompt_tokens": 900, "completion_tokens": 3, "reasoning_tokens": 7},
+        },
+        {"move": "f1f6", "usage": {"input_tokens": 800, "output_tokens": 2}},
+    ]
+    player = decision_player(models, scripted(bodies, []), max_options=26)
+    response = play(player, many_request())
+    assert response.answer == TurnAnswer(action="move", move="f1f6")
+    assert response.elapsed_s == 1.75
+    assert response.usage == Usage(1700, 5, None)
+    assert [json.loads(line) for line in response.raw.splitlines()] == bodies
+
+
+def test_decision_split_usage_is_unknown_when_a_query_reports_none(models):
+    usage = {"input_tokens": 9, "output_tokens": 1}
+    first = {"action": "move", "move": "other", "offer_draw": "no", "usage": usage}
+    bodies = [first, {"move": "f1f6"}]
+    response = play(decision_player(models, scripted(bodies, []), max_options=26), many_request())
+    assert response.usage is None
+
+
+def test_decision_other_in_the_last_group_is_a_format_error(models):
+    bodies = [{"action": "move", "move": "other", "offer_draw": "no"}, {"move": "other"}]
+    response = play(decision_player(models, scripted(bodies, []), max_options=26), many_request())
+    assert response.answer is None
+    assert "invalid answer to 'move': 'other'" in response.format_error
+
+
+def test_decision_server_error_on_a_later_query_fails_loudly(models):
+    replies = iter(
+        [
+            httpx.Response(200, json={"action": "move", "move": "other", "offer_draw": "no"}),
+            httpx.Response(500, text="a question has 2 to 26 options"),
+        ]
+    )
+    player = decision_player(models, lambda request: next(replies), max_options=26)
+    with pytest.raises(TransportError, match="HTTP 500: a question has 2 to 26 options"):
+        play(player, many_request())
 
 
 # --- scripted fake ---

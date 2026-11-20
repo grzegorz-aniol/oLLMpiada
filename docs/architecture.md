@@ -128,8 +128,8 @@ has one row per player in this game's side order, which swaps from game to game
 (see [sides alternate](game-master.md#turn-loop)): a `▶` marker on the player who
 is thinking (the side to move), side and player, `Now` (how long the current turn
 has run, empty for the other player), `Total` (the player's turn times in this game, the running turn
-included, like a chess clock), then the requests (answered model calls, counted
-as in the statistics) and the input, output and reasoning tokens. A turn's time
+included, like a chess clock), then the requests (counted as defined in
+[game master](game-master.md#turn-loop)) and the input, output and reasoning tokens. A turn's time
 covers the whole turn, retries included, and restarts with each move. Token
 counts not reported show as `–`, never as zero, and as `≥ n` when only some
 answers reported them. When the game ends or the competition stops, the timers

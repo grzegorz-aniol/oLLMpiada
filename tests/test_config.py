@@ -46,6 +46,13 @@ def test_loads_models_with_providers_and_tokens(tmp_path, models_data):
     assert local.token is None and local.available
     assert models["hosted-llm"].token == "secret"
     assert models["basal-mini"].spec.reasoning_efforts == ()
+    assert models["basal-mini"].spec.max_options is None
+
+
+def test_systemone_model_takes_max_options(tmp_path, models_data):
+    models_data["models"][3]["max_options"] = 26
+    models = load_models(write(tmp_path, models_data), {})
+    assert models["basal-mini"].spec.max_options == 26
 
 
 def test_missing_token_variable_warns_and_marks_unavailable(tmp_path, models_data, caplog):
@@ -73,6 +80,8 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         (lambda d: d["models"][0].update(type="llm"), r"models\.0\.type\s+Extra inputs"),
         (lambda d: d["models"][3].update(reasoning_efforts=["low"]), "systemone model"),
         (lambda d: d["models"][0].update(reasoning_efforts=["huge"]), r"efforts\.0\s+Input should"),
+        (lambda d: d["models"][0].update(max_options=26), "not a systemone model"),
+        (lambda d: d["models"][3].update(max_options=1), r"max_options\s+Input should be greater"),
         (lambda d: d["models"][0].pop("model"), r"models\.0\.model\s+Field required"),
         (lambda d: d["providers"][0].update(token="leak"), r"providers\.0\.token\s+Extra inputs"),
     ],
@@ -85,6 +94,8 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "type-dropped",
         "systemone-with-efforts",
         "bad-effort",
+        "max-options-on-llm",
+        "max-options-below-two",
         "missing-field",
         "unknown-field",
     ],

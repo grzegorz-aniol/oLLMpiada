@@ -66,7 +66,7 @@ class PlayerStats:
                 self.illegal_attempts += attempt.rejection is not None
 
     def add_call(self, elapsed_s: float, usage: Usage | None) -> None:
-        """Count one answered model call, accepted or rejected."""
+        """Count one answered turn request, accepted or rejected; a split decision turn is one."""
         self.calls += 1
         self.thinking_s += elapsed_s
         if usage is None:

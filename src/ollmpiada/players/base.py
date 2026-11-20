@@ -35,7 +35,10 @@ class Usage:
 
 @dataclass(frozen=True)
 class TurnResponse:
-    """One model call. `answer` is None when the reply did not match the answer format."""
+    """A player's answer to one turn request, from one or more model calls.
+
+    `answer` is None when the reply did not match the answer format.
+    """
 
     raw: str
     answer: TurnAnswer | None

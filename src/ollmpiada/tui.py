@@ -69,7 +69,7 @@ def stats_table(state: CompetitionState) -> Table:
 
 
 def _tokens(s: PlayerStats) -> str:
-    """Unknown counts are never shown as zero; `≥` marks totals some calls did not report."""
+    """Unknown counts are never shown as zero; `≥` marks totals some requests did not report."""
     if not s.tokens_known:
         return "unknown"
     reasoning = _count(s.reasoning_tokens) if s.reasoning_known else "?"

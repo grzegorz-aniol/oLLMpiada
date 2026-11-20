@@ -6,9 +6,9 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ class ModelSpec(_Strict):
     provider: str
     model: str
     reasoning_efforts: tuple[Effort, ...] = ()
+    max_options: Annotated[int, Field(ge=2)] | None = None
 
 
 class ModelsFile(_Strict):
@@ -82,6 +83,10 @@ class ModelsFile(_Strict):
                 raise ValueError(f"model {m.id!r} refers to unknown provider {m.provider!r}")
             if apis[m.provider] == "systemone" and m.reasoning_efforts:
                 raise ValueError(f"model {m.id!r} is a systemone model; it takes no efforts")
+            if apis[m.provider] != "systemone" and m.max_options is not None:
+                raise ValueError(
+                    f"model {m.id!r} is not a systemone model; it takes no max_options"
+                )
         return self
 
 

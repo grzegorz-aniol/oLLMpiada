@@ -37,7 +37,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
      "reasoning_efforts": ["low", "medium", "high"]},
     {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
      "reasoning_efforts": ["none", "low", "medium", "high"]},
-    {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF"}
+    {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF",
+     "max_options": 26}
   ]
 }
 ```
@@ -77,6 +78,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `provider` | yes | A provider `name` |
 | `model` | yes | Model name sent to the provider |
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
+| `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [split over several queries](game-master.md#answer-formats). Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
   from the model's `reasoning_efforts`, and written on the command line as
@@ -91,7 +93,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   PydanticAI's unified `thinking` setting: `none` turns thinking off, other levels
   are mapped per Claude model (adaptive thinking with that effort on current
   models, a token budget on older ones). `systemone` models take no effort, and
-  the loader rejects one that lists any.
+  the loader rejects one that lists any; likewise it rejects `max_options` on a
+  model of any other `api`.
 - **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
   know how to send thinking, so a proxy route prefix is stripped for that lookup
   (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
@@ -99,8 +102,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   JSON-schema output instead; a bare id with no effort thinks by default.
 
 The loader validates the file with Pydantic at startup: unique ids, existing
-provider names, known `api` and effort values. An invalid file stops the app
-with a message naming the bad entry.
+provider names, known `api` and effort values, `max_options` of at least 2. An
+invalid file stops the app with a message naming the bad entry.
 
 ## Environment
 

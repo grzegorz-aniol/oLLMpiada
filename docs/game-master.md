@@ -58,7 +58,7 @@ interface, so the game master, players and UI never import chess directly:
 
 `play_game` in `game_master.py` runs this loop and publishes `GameStarted`,
 `AnswerReceived`, `MoveMade`, `AnswerRejected` and `GameFinished` events to a
-callback. `AnswerReceived` comes for every answered model call, before
+callback. `AnswerReceived` comes for every answered turn request, before
 validation, with its time and usage, so a live view can count a game's requests
 and tokens while it runs, resignations and rejected answers included. Its
 `GameResult` holds the outcome (or the error of an aborted game), the final state
@@ -67,6 +67,10 @@ rejection reason; an aborted game keeps the attempts of its unfinished turn as
 an `aborted` turn. A retry's prompt quotes the rejected answer (up to 300
 characters) and the reason.
 
+- **Rule:** a request is one answered turn request, the unit of `Attempt`,
+  `AnswerReceived` and the live view's request count; a decision player's split
+  turn (see [answer formats](#answer-formats)) counts as one request however many
+  queries it sends.
 - **Decision:** every turn is a fresh, stateless request carrying the full state.
   There is no conversation history between turns: both players get the same
   information, context stays bounded, and decision models are stateless anyway.
@@ -161,16 +165,39 @@ question is a `choice`:
 | Question | Criteria |
 | --- | --- |
 | `action` | `move`, `resign`, plus `accept_draw` only while an offer is pending |
-| `move` | every legal move, keyed by its id (`e2e4`), described by its label (`e4`) |
+| `move` | every legal move, keyed by its id (`e2e4`), described by its label (`e4`); split when it exceeds `max_options` (below) |
 | `offer_draw` | `yes`, `no` |
 
 The response must contain each choice under its question name, either at the top
 level or inside `answers`, `results`, `result`, `output`, `data` or
 `predictions`, matching the client in the author's `decision-one-evals` project.
+With a single legal move no `move` question is asked, because a one-option
+question tells nothing and SystemOne templates refuse it; an answer `move` plays
+that move.
 
-- **Sensitive:** a chess position can have more than 200 legal moves. If a decision
-  server limits options per question, the adapter must fail loudly rather than
-  silently drop moves.
+- **Sensitive:** a chess position can have more than 200 legal moves, and a
+  decision server may limit the options per question (Basal's chat template
+  accepts 2 to 26). A model with `max_options` (see
+  [model fields](configuration.md#model-fields)) gets its moves split as below;
+  without it, a refused question is a transport error that stops the game. Moves
+  are never silently dropped.
+- **Rule:** when the N legal moves exceed `max_options` L, the `move` question is
+  split over several queries. The moves, sorted by id so that moves sharing a
+  prefix (in chess, the origin square) stay adjacent, go into the fewest groups
+  k with (k-1)(L-1)+L >= N, as equal as possible with the larger groups last. Every
+  group but the last adds the option `other`, described by the labels of all
+  moves outside the group, so each question still shows every legal move; the
+  last group has no `other`, and no question has fewer than two options; a
+  legal move id equal to `other` raises an error instead of colliding with it. A
+  group boundary may still split one origin square's moves, since equal group
+  sizes take precedence. The first query asks `action`, `offer_draw` and the
+  first group; each later query asks only the next group's `move`, and only after
+  the answer `other`. An action
+  other than `move` ends the turn after the first query. The queries make one
+  turn: one response with the replies' raw text joined and their time and usage
+  summed (usage unknown when any query reports none). A bad answer in any query
+  is a format error for the whole turn, and its retry starts again from the
+  first query.
 
 ## Validation and retries
 

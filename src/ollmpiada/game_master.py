@@ -24,7 +24,7 @@ RAW_SHOWN = 300
 
 @dataclass(frozen=True)
 class Attempt:
-    """One model call; `rejection` is None for the answer that was accepted."""
+    """One answer to a turn request; `rejection` is None for the answer that was accepted."""
 
     raw: str
     elapsed_s: float
@@ -62,7 +62,7 @@ class GameStarted:
 
 @dataclass(frozen=True)
 class AnswerReceived:
-    """Every answered model call, published before the answer is validated."""
+    """Every answered turn request (a split decision turn is one), published before validation."""
 
     number: int
     side: Side
