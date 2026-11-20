@@ -37,10 +37,14 @@ def resolve_player(name: str, models: dict[str, Model]) -> tuple[Model, Effort |
 def create_player(name: str, models: dict[str, Model], *, timeout_s: float) -> Player:
     """Build the player a `<id>[@effort]` name refers to.
 
+    `timeout_s` is the default per-call timeout; the model's provider `timeout_s`
+    replaces it.
+
     Raises:
         PlayerError: See `resolve_player`.
     """
     model, effort = resolve_player(name, models)
+    timeout_s = model.provider.timeout_s or timeout_s
     if model.provider.api == "systemone":
         return DecisionPlayer(name, model, timeout_s=timeout_s)
     return create_llm_player(name, model, effort=effort, timeout_s=timeout_s)

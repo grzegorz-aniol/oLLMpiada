@@ -56,6 +56,7 @@ class Provider(_Strict):
     url: str
     api: Api
     token_env: str | None = None
+    timeout_s: Annotated[float, Field(gt=0)] | None = None
 
 
 class ModelSpec(_Strict):
@@ -64,6 +65,7 @@ class ModelSpec(_Strict):
     model: str
     reasoning_efforts: tuple[Effort, ...] = ()
     max_options: Annotated[int, Field(ge=2)] | None = None
+    max_tokens: Annotated[int, Field(ge=1)] | None = None
 
 
 class ModelsFile(_Strict):
@@ -83,6 +85,8 @@ class ModelsFile(_Strict):
                 raise ValueError(f"model {m.id!r} refers to unknown provider {m.provider!r}")
             if apis[m.provider] == "systemone" and m.reasoning_efforts:
                 raise ValueError(f"model {m.id!r} is a systemone model; it takes no efforts")
+            if apis[m.provider] == "systemone" and m.max_tokens is not None:
+                raise ValueError(f"model {m.id!r} is a systemone model; it takes no max_tokens")
             if apis[m.provider] != "systemone" and m.max_options is not None:
                 raise ValueError(
                     f"model {m.id!r} is not a systemone model; it takes no max_options"

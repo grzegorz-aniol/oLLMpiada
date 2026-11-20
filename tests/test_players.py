@@ -69,6 +69,25 @@ def test_create_player_picks_adapter_by_provider_api(models):
     assert isinstance(decision, DecisionPlayer) and decision.name == "basal-mini"
 
 
+@pytest.mark.parametrize("model_id", ["local-llm", "claude", "basal-mini"])
+@pytest.mark.parametrize(("provider_timeout", "expected"), [(None, 5), (600, 600)])
+def test_create_player_uses_provider_timeout_over_default(
+    models, monkeypatch, model_id, provider_timeout, expected
+):
+    model = models[model_id]
+    provider = model.provider.model_copy(update={"timeout_s": provider_timeout})
+    models = {model_id: dataclasses.replace(model, provider=provider)}
+    timeouts = []
+
+    def capture(*args, timeout_s, **kwargs):
+        timeouts.append(timeout_s)
+
+    monkeypatch.setattr("ollmpiada.players.create_llm_player", capture)
+    monkeypatch.setattr("ollmpiada.players.DecisionPlayer", capture)
+    create_player(model_id, models, timeout_s=5)
+    assert timeouts == [expected]
+
+
 # --- LLM player ---
 
 
@@ -101,7 +120,8 @@ def test_llm_answer_with_usage_and_settings():
     assert response.format_error is None and response.elapsed_s >= 0
     settings = seen[0].model_settings
     assert settings["openai_reasoning_effort"] == "high"
-    assert settings["request_timeout"] == 7 and settings["max_retries"] == 0
+    assert settings["request_timeout"] == settings["timeout"] == 7
+    assert settings["max_retries"] == 0
 
 
 def test_llm_sends_rules_and_answer_format_as_instructions_and_the_turn_as_user_prompt():
@@ -222,6 +242,24 @@ def test_llm_over_openai_compatible_http(models, model_id, authorization):
     ]
 
 
+@pytest.mark.parametrize(("max_tokens", "sent"), [(None, None), (256, 256)])
+def test_llm_max_tokens_caps_openai_output(models, max_tokens, sent):
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=CHAT_COMPLETION)
+
+    model = models["local-llm"]
+    model = dataclasses.replace(
+        model, spec=model.spec.model_copy(update={"max_tokens": max_tokens})
+    )
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    play(create_llm_player("p", model, effort=None, timeout_s=5, http_client=client))
+    assert bodies[0].get("max_tokens") == sent
+    assert "max_completion_tokens" not in bodies[0]
+
+
 @pytest.mark.parametrize(
     ("usage", "expected"),
     [
@@ -275,7 +313,7 @@ ANTHROPIC_MESSAGE = {
 def anthropic_reply(request: httpx2.Request) -> httpx2.Response:
     """Answer like the Messages API, as server-sent events: JSON text for native output,
     else the output tool. PydanticAI streams because a Claude model's default
-    `max_tokens` is its maximum output, which the SDK refuses to wait for unstreamed."""
+    `max_tokens` is its maximum output, too long to wait for unstreamed."""
     body = json.loads(request.content)
     answer = '{"action": "resign"}'
     if "format" in body.get("output_config", {}):
@@ -338,6 +376,42 @@ def test_llm_over_anthropic_messages_http(
     ]
     assert body.get("thinking") == thinking
     assert body.get("output_config", {}).get("effort") == output_effort
+
+
+def test_llm_max_tokens_caps_anthropic_output(models):
+    """With `max_tokens` set PydanticAI does not stream, so the reply is a plain message."""
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=ANTHROPIC_MESSAGE)
+
+    model = models["claude"]
+    model = dataclasses.replace(model, spec=model.spec.model_copy(update={"max_tokens": 256}))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    player = create_llm_player("c", model, effort="none", timeout_s=5, http_client=client)
+    assert play(player).answer == TurnAnswer(action="resign")
+    assert bodies[0]["max_tokens"] == 256
+
+
+@pytest.mark.parametrize(
+    ("model_id", "reply"),
+    [
+        ("local-llm", lambda request: httpx2.Response(200, json=CHAT_COMPLETION)),
+        ("claude", anthropic_reply),
+    ],
+)
+def test_llm_timeout_reaches_each_http_attempt(models, model_id, reply):
+    """A timeout above the SDK client's own 600 s default must still reach the request."""
+    timeouts = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        timeouts.append(request.extensions["timeout"]["read"])
+        return reply(request)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    play(create_llm_player("p", models[model_id], effort=None, timeout_s=900, http_client=client))
+    assert timeouts == [900]
 
 
 def test_llm_anthropic_http_error_is_a_transport_error(models):

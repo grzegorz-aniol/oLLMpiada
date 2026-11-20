@@ -13,6 +13,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model as AIModel
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -38,7 +39,11 @@ class LLMPlayer:
         self, name: str, model: AIModel, *, timeout_s: float, settings: ModelSettings | None = None
     ) -> None:
         # The game master owns every retry, so the provider client makes one attempt.
-        settings = ModelSettings(request_timeout=timeout_s, max_retries=0) | (settings or {})
+        # `request_timeout` only shortens a call; `timeout` replaces the SDK client's own
+        # per-attempt limit (600 s), which a slow local server would otherwise hit.
+        settings = ModelSettings(request_timeout=timeout_s, timeout=timeout_s, max_retries=0) | (
+            settings or {}
+        )
         self.name = name
         # Output retries are off so every invalid answer reaches the game master to be counted.
         self._agent = Agent(
@@ -81,6 +86,8 @@ def create_llm_player(
     url, token = model.provider.url, model.token
     key = token or "unused"  # the clients refuse an empty key; the header is omitted below
     settings = ModelSettings()
+    if model.spec.max_tokens:
+        settings["max_tokens"] = model.spec.max_tokens
     if model.provider.api == "anthropic-messages":
         provider = AnthropicProvider(base_url=url, api_key=key, http_client=http_client)
         # A proxy route prefix (`anthropic/claude-...`) would hide the Claude profile,
@@ -92,7 +99,10 @@ def create_llm_player(
         omit = anthropic.Omit()
     else:
         provider = OpenAIProvider(base_url=url, api_key=key, http_client=http_client)
-        ai_model = OpenAIChatModel(model.spec.model, provider=provider)
+        # A partial profile is merged over the provider's default. The cap goes out as
+        # `max_tokens`, the field local servers and OpenRouter read (see configuration docs).
+        profile = OpenAIModelProfile(openai_chat_supports_max_completion_tokens=False)
+        ai_model = OpenAIChatModel(model.spec.model, provider=provider, profile=profile)
         if effort:
             settings["openai_reasoning_effort"] = effort
         omit = openai.Omit()

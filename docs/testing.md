@@ -32,8 +32,10 @@ uv run pytest tests/test_x.py -k name   # one test
 - Player adapters are tested against recorded HTTP exchanges or PydanticAI's
   `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI and Anthropic
   clients take an `httpx2` client (`httpx2.MockTransport`); the decision player
-  uses `httpx` (`httpx.MockTransport`). Current Claude models are always streamed,
-  so an Anthropic mock answers with server-sent events.
+  uses `httpx` (`httpx.MockTransport`). PydanticAI streams a Claude call only
+  when no `max_tokens` is set and its default (the model's maximum output) is
+  large, which it is for current models, so an Anthropic mock answers with
+  server-sent events and, for a capped model, with a plain JSON message.
 - Terminal views are tested by rendering into a recording Rich `Console`
   (`Console(record=True)`) and checking the exported text; CLI commands are
   tested by calling the entry point with arguments and checking output and exit

@@ -23,7 +23,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 {
   "providers": [
     {"name": "local-llama", "url": "http://127.0.0.1:1234/v1",
-     "api": "openai-completions"},
+     "api": "openai-completions", "timeout_s": 600},
     {"name": "openrouter", "url": "https://openrouter.ai/api/v1",
      "api": "openai-completions", "token_env": "OPENROUTER_API_KEY"},
     {"name": "anthropic", "url": "https://api.anthropic.com",
@@ -34,7 +34,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
     {"id": "qwen3-30b-local", "provider": "local-llama", "model": "qwen3-30b-a3b",
      "reasoning_efforts": ["none", "low", "medium", "high"]},
     {"id": "gpt-oss-120b", "provider": "openrouter", "model": "openai/gpt-oss-120b",
-     "reasoning_efforts": ["low", "medium", "high"]},
+     "reasoning_efforts": ["low", "medium", "high"], "max_tokens": 16384},
     {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
      "reasoning_efforts": ["none", "low", "medium", "high"]},
     {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF",
@@ -51,6 +51,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `url` | yes | Base URL; what it points at depends on `api` (below) |
 | `api` | yes | The API the provider speaks, which picks the player adapter (below) |
 | `token_env` | no | Name of the environment variable holding the bearer token |
+| `timeout_s` | no | Timeout of one call to this provider's models in seconds, above 0; missing means `OLLMPIADA_REQUEST_TIMEOUT_S` |
 
 | `api` | Player | `url` |
 | --- | --- | --- |
@@ -69,6 +70,9 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 - **Rule:** a `token_env` that names a variable missing from the environment is a
   startup warning, not an error: `ollmpiada models` shows the model as
   unavailable and `ollmpiada run` refuses it.
+- **Rule:** a provider's `timeout_s` replaces `OLLMPIADA_REQUEST_TIMEOUT_S` for
+  every call to its models, whatever the `api`; it exists because local inference
+  can be much slower than the hosted default allows for.
 
 ### Model fields
 
@@ -78,6 +82,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `provider` | yes | A provider `name` |
 | `model` | yes | Model name sent to the provider |
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
+| `max_tokens` | no | LLM models only: most output tokens per call, reasoning included, at least 1; sent as the `max_tokens` request field for both LLM APIs. Missing means ollmpiada sets no cap (for `anthropic-messages` PydanticAI then sends the model's maximum output) |
 | `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master.md#answer-formats) in the same query. Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
@@ -93,8 +98,18 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   PydanticAI's unified `thinking` setting: `none` turns thinking off, other levels
   are mapped per Claude model (adaptive thinking with that effort on current
   models, a token budget on older ones). `systemone` models take no effort, and
-  the loader rejects one that lists any; likewise it rejects `max_options` on a
-  model of any other `api`.
+  the loader rejects one that lists any, or `max_tokens`; likewise it rejects
+  `max_options` on a model of any other `api`.
+- **Sensitive:** `max_tokens` counts reasoning tokens too, so a low cap on a
+  reasoning model can cut the answer off before it is written.
+- **Decision:** for `openai-completions` the cap is sent as the `max_tokens`
+  field (the OpenAI model profile turns off PydanticAI's default
+  `max_completion_tokens`), because llama.cpp, vLLM, LM Studio, Ollama and
+  OpenRouter read `max_tokens`, while some of them (OpenRouter, Ollama) silently
+  ignore the newer `max_completion_tokens`. Trade-off: OpenAI's own API rejects
+  `max_tokens` for o-series reasoning models, so point such a model at another
+  provider or leave its `max_tokens` unset. `anthropic-messages` sends
+  `max_tokens` natively.
 - **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
   know how to send thinking, so a proxy route prefix is stripped for that lookup
   (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
@@ -102,7 +117,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   JSON-schema output instead; a bare id with no effort thinks by default.
 
 The loader validates the file with Pydantic at startup: unique ids, existing
-provider names, known `api` and effort values, `max_options` of at least 2. An
+provider names, known `api` and effort values, `max_options` of at least 2,
+`max_tokens` of at least 1, a positive `timeout_s`. An
 invalid file stops the app with a message naming the bad entry.
 
 ## Environment
@@ -115,5 +131,5 @@ not read it. `.env.example` lists the variable names with empty values.
 | --- | --- | --- |
 | `OLLMPIADA_MODELS_CONFIG` | `config/models.json` | Path to the model config |
 | `OLLMPIADA_RUNS_DIR` | `.local/runs` | Where competition results are written |
-| `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call |
+| `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call in seconds; a provider's `timeout_s` overrides it ([provider fields](#provider-fields)) |
 | *names from `token_env`* | none | Provider tokens |

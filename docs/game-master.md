@@ -144,8 +144,12 @@ The adapter sends the system part as PydanticAI `instructions` (a `system`
 message for OpenAI chat completions, the `system` field for Anthropic messages)
 with a short ANSWER FORMAT section naming the three fields appended, and the user
 part as the user prompt. The chosen reasoning effort is mapped per API, as
-described in [model fields](configuration.md#model-fields). The adapter sets
-`request_timeout` from `OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the provider
+described in [model fields](configuration.md#model-fields), and so is the
+optional `max_tokens` cap. The adapter sets both `request_timeout` (the deadline
+of the whole call) and `timeout` (the SDK client's per-attempt limit, 600 s by
+default, which `request_timeout` alone cannot raise) from the provider's
+`timeout_s` or else `OLLMPIADA_REQUEST_TIMEOUT_S` (see
+[provider fields](configuration.md#provider-fields)), and turns off the provider
 client's own retries, so the game master owns every retry. Without a token the `Authorization` header is
 omitted per request (`extra_headers` with the SDK's `Omit`), because both the
 OpenAI and the Anthropic clients otherwise always send the key as a bearer token.
