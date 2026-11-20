@@ -1,0 +1,117 @@
+"""The game interface the game master, players and UI work against."""
+
+import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import StrEnum
+from string import Template
+
+from rich.console import RenderableType
+
+
+class Side(StrEnum):
+    FIRST = "first"
+    SECOND = "second"
+
+    @property
+    def opponent(self) -> Side:
+        return Side.SECOND if self is Side.FIRST else Side.FIRST
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How a game ended: a winner, or a draw when `winner` is None."""
+
+    winner: Side | None
+    reason: str
+
+
+class IllegalMove(ValueError):
+    """A model's move text is not a legal move; the message is the reason shown to it."""
+
+
+@dataclass(frozen=True)
+class PromptContext:
+    """Everything the shared prompt says about one turn."""
+
+    side: Side
+    position: str
+    legal_moves: list[str]
+    turn: int
+    max_turns: int
+    draw_offered: bool = False
+    rejection: str | None = None
+
+
+class Game[S](ABC):
+    """A two-player, turn-based, perfect-information game. States are never mutated."""
+
+    name: str
+    side_names: tuple[str, str]
+    prompt_template: str
+    record_extension: str
+
+    @abstractmethod
+    def new_state(self) -> S: ...
+
+    @abstractmethod
+    def side_to_move(self, state: S) -> Side: ...
+
+    @abstractmethod
+    def legal_moves(self, state: S) -> dict[str, str]:
+        """Legal moves as `{id: label}`."""
+
+    @abstractmethod
+    def parse_move(self, state: S, text: str) -> str:
+        """Turn a model's move text into a legal move id.
+
+        Raises:
+            IllegalMove: The text names no legal move.
+        """
+
+    @abstractmethod
+    def apply(self, state: S, move_id: str) -> S: ...
+
+    @abstractmethod
+    def outcome(self, state: S) -> Outcome | None:
+        """The result once the rules end the game, else None."""
+
+    @abstractmethod
+    def describe(self, state: S) -> str:
+        """Position text for the prompt."""
+
+    @abstractmethod
+    def render(self, state: S) -> RenderableType:
+        """The board for the terminal UI."""
+
+    @abstractmethod
+    def record(self, state: S, outcome: Outcome | None, players: tuple[str, str]) -> str:
+        """The game's native record; `players` are named in side order."""
+
+    def side_name(self, side: Side) -> str:
+        return self.side_names[0 if side is Side.FIRST else 1]
+
+    def prompt(self, ctx: PromptContext) -> str:
+        """Render the shared prompt; players append their own answer format."""
+        text = Template(self.prompt_template).substitute(
+            side=self.side_name(ctx.side),
+            opponent=self.side_name(ctx.side.opponent),
+            position=ctx.position,
+            legal_moves=", ".join(ctx.legal_moves),
+            turn=ctx.turn,
+            max_turns=ctx.max_turns,
+            turns_left=ctx.max_turns - ctx.turn + 1,
+            draw_offer=(
+                f"{self.side_name(ctx.side.opponent)} offers a draw. Answer accept_draw to "
+                "accept it, or make a move to decline it."
+                if ctx.draw_offered
+                else "No draw offer is pending."
+            ),
+            previous_attempt=(
+                f"PREVIOUS ATTEMPT\n\nYour previous answer this turn was rejected: "
+                f"{ctx.rejection}\nAnswer again with a legal move."
+                if ctx.rejection
+                else ""
+            ),
+        )
+        return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"

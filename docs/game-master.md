@@ -17,9 +17,9 @@ interface, so the game master, players and UI never import chess directly:
 
 | Member | Purpose |
 | --- | --- |
-| `name`, `rules_text` | Identifier and the rules section of the prompt |
+| `name`, `prompt_template` | Identifier (the `--game` value) and the prompt template text (see [prompts](#prompts)) |
 | `new_state()` | Starting position |
-| `side_to_move(state)` | Which side (`first` / `second`; for chess White / Black) moves |
+| `side_to_move(state)` | Which `Side` (`first` / `second`; for chess White / Black) moves |
 | `legal_moves(state)` | Legal moves as `{id: label}`: a stable machine id (UCI `e2e4`) and a readable label (SAN `e4`) |
 | `parse_move(state, text)` | Turns a model's move text into a legal move id, or raises with a reason |
 | `apply(state, move_id)` | Next state |
@@ -27,13 +27,19 @@ interface, so the game master, players and UI never import chess directly:
 | `describe(state)` | Position text for the prompt (board, history, extra facts) |
 | `side_names` | Display names of the two sides (for chess `White`, `Black`), used in tables and summaries |
 | `render(state)` | Board for the terminal UI, as a Rich renderable |
-| `record(state)` | The game's native record saved with each game, with its file extension (for chess PGN, `.pgn`) |
+| `prompt(context)` | The shared prompt, rendered from `prompt_template` (implemented once in the base class) |
+| `record(state, outcome, players)` | The game's native record saved with each game, and `record_extension` (for chess PGN, `pgn`) |
 
 - **Rule:** a new game adds one module under `games/`, its prompt text and one
   registry entry; the game master, players, statistics, runner and terminal UI do
   not change.
 - Chess uses the `chess` library for everything above. `parse_move` accepts SAN
-  (`Nf3`) and UCI (`g1f3`), case and check-mark tolerant.
+  (`Nf3`) and UCI (`g1f3`), case and check-mark tolerant. An answer that fits
+  several legal moves is rejected with every reading, so the retry can fix it:
+  under-specified SAN (`Nd2` with knights on b1 and f1) or a case-blind match
+  (`BXC4`: pawn or bishop).
+- States are immutable: `apply` returns a new state, so the game master can keep
+  the position before a move.
 
 ## Turn loop
 
@@ -78,8 +84,13 @@ Prompt sections, in order:
    favor either; it turns a test of rule recall into a test of play.
 5. **Previous attempt** (retries only) - the rejected answer and why.
 
-Templates live next to their game as plain text files so they can be reworded
-without code changes. Wording changes are recorded in the competition result so
+Templates live next to their game as plain text files (`games/chess_prompt.txt`)
+so they can be reworded without code changes. They use `string.Template`
+placeholders: `$side`, `$opponent`, `$position`, `$legal_moves`, `$turn`,
+`$max_turns`, `$turns_left`, `$draw_offer` and `$previous_attempt` (empty except
+on retries). The draw-offer and previous-attempt sentences are worded in
+`Game.prompt` (`games/base.py`), because `string.Template` has no conditionals;
+the prompt version recorded with a competition must cover them too. Wording changes are recorded in the competition result so
 runs with different prompts are not compared by accident.
 
 ## Answer formats
@@ -148,7 +159,10 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
 | Third rejected answer in one turn | Win for the opponent |
 
 - **Decision:** claimable draws are claimed automatically, so models cannot shuffle
-  pieces until the turn limit. Material adjudication at the turn limit is not part
+  pieces until the turn limit. Only a repetition or 50-move count that has actually
+  happened is claimed, not one the side to move could reach with its next move
+  (as the `chess` library's `claim_draw=True` would), so the choice stays with the
+  player. Material adjudication at the turn limit is not part
   of the MVP.
 - A draw offer stays open for the opponent's next answer only; any move by the
   opponent declines it.

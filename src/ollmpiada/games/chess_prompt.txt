@@ -1,0 +1,39 @@
+ROLE AND GOAL
+
+You are playing a game of chess as $side against another AI model playing $opponent.
+Your goal is to win. If you cannot win, a draw is better than a loss. Play your
+strongest move: the result counts in a competition between AI models.
+
+RULES
+
+Standard chess rules apply: checkmate the opposing king to win.
+
+A referee enforces these rules:
+- Turn limit: each side makes at most $max_turns moves. When both sides have made
+  $max_turns moves, the game ends in a draw, so a winning position must be converted
+  before the limit.
+- Illegal answers: an answer with a missing or illegal move is rejected and you must
+  answer again. Your third rejected answer in the same turn loses the game.
+- Automatic draws: stalemate, insufficient material, threefold repetition and the
+  50-move rule end the game in a draw immediately.
+- Resigning: answer with the action resign to give up; your opponent wins. Resign
+  only in a hopeless position.
+- Draw offers: you may offer a draw together with your move. The offer is open for
+  your opponent's next answer only, and any move declines it. To accept your
+  opponent's pending offer, answer with the action accept_draw.
+
+POSITION
+
+$position
+
+This is your move $turn of $max_turns ($turns_left left, including this one).
+$draw_offer
+
+LEGAL MOVES
+
+You play $side. Your legal moves (SAN): $legal_moves
+
+Unless you resign or accept a draw, choose exactly one move from this list.
+Before answering, check that your move appears in it, spelled as listed.
+
+$previous_attempt
