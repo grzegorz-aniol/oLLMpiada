@@ -78,7 +78,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `provider` | yes | A provider `name` |
 | `model` | yes | Model name sent to the provider |
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
-| `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [split over several queries](game-master.md#answer-formats). Missing means no limit |
+| `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master.md#answer-formats) in the same query. Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
   from the model's `reasoning_efforts`, and written on the command line as

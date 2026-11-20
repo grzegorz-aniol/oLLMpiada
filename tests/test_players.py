@@ -1,7 +1,9 @@
 import asyncio
 import dataclasses
 import json
-from types import SimpleNamespace
+import logging
+import math
+import random
 
 import httpx
 import httpx2
@@ -13,7 +15,7 @@ from pydantic_ai.usage import RequestUsage
 
 from ollmpiada.config import load_models
 from ollmpiada.games.base import Prompt
-from ollmpiada.players import PlayerError, create_player, decision, resolve_player
+from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
 from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player
@@ -483,160 +485,197 @@ def test_decision_connection_error_is_a_transport_error(models):
         play(decision_player(models, handler))
 
 
-# --- decision player: moves split over several questions ---
+# --- decision player: moves past max_options asked per piece ---
 
-# 30 moves from six origin squares, inserted out of order.
-MANY_MOVES = {f"{f}1{f}{r}": f"{f.upper()}{r}" for f in "fedcba" for r in range(2, 7)}
+QUEEN = {f"d1{square}": f"Q{square}" for square in ("d2", "d3", "d4", "d5", "d6", "d7", "d8")}
+KNIGHT = {"g1f3": "Nf3", "g1h3": "Nh3"}
+KING = {"e1f1": "Kf1"}
+GROUPS = {"queen_d1": QUEEN, "knight_g1": KNIGHT, "king_e1": KING}
+GROUPED = TurnRequest(PROMPT, {**QUEEN, **KNIGHT, **KING}, move_groups=GROUPS)
 
 
-def scripted(bodies, sent):
-    """Answers each query with the next body and records the questions it asked."""
-    replies = iter(bodies)
+def scripted(body, sent):
+    """Answers with `body` and records the questions asked."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content)["questions"])
-        return httpx.Response(200, json=next(replies))
+        return httpx.Response(200, json=body)
 
     return handler
 
 
-def many_request(moves=MANY_MOVES):
-    return TurnRequest(PROMPT, moves)
-
-
-def test_decision_splits_moves_equally_and_other_lists_the_unlisted_moves(models):
+def test_decision_asks_the_piece_and_each_pieces_moves_in_one_query(models):
     sent = []
-    bodies = [
-        {"action": "move", "move": "other", "offer_draw": "yes"},
-        {"move": "f1f6"},
-    ]
-    player = decision_player(models, scripted(bodies, sent), max_options=26)
-    response = play(player, many_request())
-    assert response.answer == TurnAnswer(action="move", move="f1f6", offer_draw=True)
+    body = {
+        "action": "move",
+        "offer_draw": "yes",
+        "piece": "knight_g1",
+        "move_knight_g1": "g1f3",
+        "move_queen_d1": "d1d8",
+    }
+    response = play(decision_player(models, scripted(body, sent), max_options=8), GROUPED)
+    # The chosen piece's move is played; the other piece's answer is ignored.
+    assert response.answer == TurnAnswer(action="move", move="g1f3", offer_draw=True)
 
-    first, second = sent
-    assert set(first) == {"action", "move", "offer_draw"} and set(second) == {"move"}
-    first_moves = first["move"]["criteria"]
-    second_moves = second["move"]["criteria"]
-    other = first_moves.pop("other")
-    assert "other" not in second_moves
-    assert len(first_moves) == len(second_moves) == 15
-    # Sorted ids keep each origin square's moves adjacent.
-    assert list(first_moves) + list(second_moves) == sorted(MANY_MOVES)
-    assert other.endswith(", ".join(second_moves.values()))
-    assert not any(label in other for label in first_moves.values())
+    (questions,) = sent
+    assert set(questions) == {"action", "offer_draw", "piece", "move_queen_d1", "move_knight_g1"}
+    assert questions["piece"]["criteria"] == {
+        "queen_d1": "Qd2, Qd3, Qd4, Qd5, Qd6, Qd7, Qd8",
+        "knight_g1": "Nf3, Nh3",
+        "king_e1": "Kf1",
+    }
+    assert questions["move_queen_d1"]["criteria"] == QUEEN
+    assert questions["move_knight_g1"]["criteria"] == KNIGHT
+    assert "other" not in json.dumps(questions)
 
 
-def test_decision_fitting_moves_are_one_question(models):
+def test_decision_piece_with_a_single_move_plays_it_without_a_move_question(models):
     sent = []
-    body = {"action": "move", "move": "a1a2", "offer_draw": "no"}
-    player = decision_player(models, scripted([body], sent), max_options=30)
-    response = play(player, many_request())
-    assert response.answer == TurnAnswer(action="move", move="a1a2")
-    assert len(sent) == 1 and sent[0]["move"]["criteria"] == MANY_MOVES
+    body = {"action": "move", "offer_draw": "no", "piece": "king_e1"}
+    response = play(decision_player(models, scripted(body, sent), max_options=8), GROUPED)
+    assert response.answer == TurnAnswer(action="move", move="e1f1")
+    assert "move_king_e1" not in sent[0]
 
 
-def test_decision_split_rejects_a_move_id_equal_to_other(models):
-    moves = {**MANY_MOVES, "other": "Other"}
-    player = decision_player(models, scripted([], []), max_options=26)
-    with pytest.raises(ValueError, match="'other'"):
-        play(player, many_request(moves))
-
-
-@pytest.mark.parametrize("max_options", [2, 3, 7, 26])
-def test_decision_other_chain_reaches_the_last_group_within_limits(models, max_options):
-    for count in range(max_options + 1, 4 * max_options + 2):
-        moves = {f"m{i:03}": f"move {i}" for i in range(count)}
-        sent = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            questions = json.loads(request.content)["questions"]
-            sent.append(questions["move"]["criteria"])
-            choice = "other" if "other" in sent[-1] else next(iter(sent[-1]))
-            return httpx.Response(200, json={"action": "move", "move": choice, "offer_draw": "no"})
-
-        player = decision_player(models, handler, max_options=max_options)
-        response = play(player, many_request(moves))
-
-        groups = [[m for m in criteria if m != "other"] for criteria in sent]
-        assert response.answer == TurnAnswer(action="move", move=groups[-1][0])
-        assert [m for group in groups for m in group] == sorted(moves)
-        assert all(2 <= len(criteria) <= max_options for criteria in sent)
-        assert ["other" in criteria for criteria in sent] == [True] * (len(sent) - 1) + [False]
-        # `other` lists every move outside its group, earlier and later ones alike.
-        for criteria, group in zip(sent[:-1], groups, strict=False):
-            outside = [moves[m] for m in sorted(moves) if m not in group]
-            expected = "A move not listed in this question: " + ", ".join(outside)
-            assert criteria["other"] == expected
-        assert max(map(len, groups)) - min(map(len, groups)) <= 1
-        # The fewest queries: one group less could not hold every move.
-        assert (len(sent) - 2) * (max_options - 1) + max_options < count
-
-
-def test_decision_resign_asks_no_further_move_question(models):
+def test_decision_splits_a_piece_with_more_moves_than_max_options(models):
     sent = []
-    player = decision_player(models, scripted([{"action": "resign"}], sent), max_options=26)
-    response = play(player, many_request())
-    assert response.answer == TurnAnswer(action="resign")
+    body = {"action": "move", "offer_draw": "no", "piece": "queen_d1_2", "move_queen_d1_2": "d1d7"}
+    response = play(decision_player(models, scripted(body, sent), max_options=4), GROUPED)
+    assert response.answer == TurnAnswer(action="move", move="d1d7")
+    questions = sent[0]
+    pieces = ["queen_d1_1", "queen_d1_2", "knight_g1", "king_e1"]
+    assert list(questions["piece"]["criteria"]) == pieces
+    assert list(questions["move_queen_d1_1"]["criteria"]) == ["d1d2", "d1d3", "d1d4", "d1d5"]
+    assert list(questions["move_queen_d1_2"]["criteria"]) == ["d1d6", "d1d7", "d1d8"]
+    assert "move_queen_d1" not in questions
+
+
+def test_decision_moves_that_fit_are_one_move_question_without_a_piece_question(models, caplog):
+    sent = []
+    body = {"action": "move", "offer_draw": "no", "move": "e1f1"}
+    with caplog.at_level(logging.WARNING):
+        response = play(decision_player(models, scripted(body, sent), max_options=10), GROUPED)
+    assert response.answer == TurnAnswer(action="move", move="e1f1")
+    assert set(sent[0]) == {"action", "offer_draw", "move"}
+    assert sent[0]["move"]["criteria"] == GROUPED.legal_moves
+    assert not caplog.records
+
+
+def test_decision_ungrouped_moves_past_max_options_are_split_into_groups(models):
+    sent = []
+    request = TurnRequest(PROMPT, GROUPED.legal_moves)
+    body = {"action": "move", "offer_draw": "no", "piece": "all_2", "move_all_2": "g1h3"}
+    response = play(decision_player(models, scripted(body, sent), max_options=8), request)
+    assert response.answer == TurnAnswer(action="move", move="g1h3")
+    assert list(sent[0]["piece"]["criteria"]) == ["all_1", "all_2"]
+    assert len(sent[0]["move_all_1"]["criteria"]) == len(sent[0]["move_all_2"]["criteria"]) == 5
+
+
+def test_decision_splitting_logs_a_warning(models, caplog):
+    body = {"action": "resign"}
+    with caplog.at_level(logging.WARNING, logger="ollmpiada.players.decision"):
+        play(decision_player(models, scripted(body, []), max_options=4), GROUPED)
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == (
+        "basal-mini: 10 legal moves exceed max_options 4; asking for the piece first in 4 groups;"
+        " pieces split further: 1"
+    )
+
+
+def test_decision_resign_needs_no_piece_or_move_answer(models):
+    sent = []
+    player = decision_player(models, scripted({"action": "resign"}, sent), max_options=8)
+    assert play(player, GROUPED).answer == TurnAnswer(action="resign")
     assert len(sent) == 1
 
 
+@pytest.mark.parametrize("move_groups", [None, {"king_e1": KING}], ids=["ungrouped", "grouped"])
 @pytest.mark.parametrize("max_options", [None, 26])
-def test_decision_single_legal_move_is_played_without_a_move_question(models, max_options):
+def test_decision_single_legal_move_is_played_without_a_move_question(
+    models, max_options, move_groups
+):
     sent = []
     body = {"action": "move", "offer_draw": "yes"}
-    player = decision_player(models, scripted([body], sent), max_options=max_options)
-    response = play(player, TurnRequest(PROMPT, {"e1f1": "Kf1"}))
+    player = decision_player(models, scripted(body, sent), max_options=max_options)
+    response = play(player, TurnRequest(PROMPT, KING, move_groups=move_groups))
     assert response.answer == TurnAnswer(action="move", move="e1f1", offer_draw=True)
     assert set(sent[0]) == {"action", "offer_draw"}
 
 
-def test_decision_split_sums_time_usage_and_raw_text(models, monkeypatch):
-    clock = iter([0.0, 1.5, 10.0, 10.25])
-    # Only the decision module's clock: httpx reads the global one.
-    monkeypatch.setattr(decision, "time", SimpleNamespace(perf_counter=lambda: next(clock)))
-    bodies = [
-        {
-            "action": "move",
-            "move": "other",
-            "offer_draw": "no",
-            "usage": {"prompt_tokens": 900, "completion_tokens": 3, "reasoning_tokens": 7},
-        },
-        {"move": "f1f6", "usage": {"input_tokens": 800, "output_tokens": 2}},
-    ]
-    player = decision_player(models, scripted(bodies, []), max_options=26)
-    response = play(player, many_request())
-    assert response.answer == TurnAnswer(action="move", move="f1f6")
-    assert response.elapsed_s == 1.75
-    assert response.usage == Usage(1700, 5, None)
-    assert [json.loads(line) for line in response.raw.splitlines()] == bodies
+@pytest.mark.parametrize(
+    ("body", "error"),
+    [
+        ({"piece": "knight_g1", "move_knight_g1": "d1d2"}, "invalid answer to 'move_knight_g1'"),
+        ({"piece": "knight_g1"}, "invalid answer to 'move_knight_g1': None"),
+        ({"piece": "rook_a1", "move_knight_g1": "g1f3"}, "invalid answer to 'piece'"),
+        ({"move_knight_g1": "g1f3"}, "invalid answer to 'piece': None"),
+    ],
+    ids=["move-of-another-piece", "no-move", "unknown-piece", "no-piece"],
+)
+def test_decision_bad_piece_or_move_answers_are_format_errors(models, body, error):
+    body = {"action": "move", "offer_draw": "no", **body}
+    response = play(decision_player(models, scripted(body, []), max_options=8), GROUPED)
+    assert response.answer is None and error in response.format_error
 
 
-def test_decision_split_usage_is_unknown_when_a_query_reports_none(models):
-    usage = {"input_tokens": 9, "output_tokens": 1}
-    first = {"action": "move", "move": "other", "offer_draw": "no", "usage": usage}
-    bodies = [first, {"move": "f1f6"}]
-    response = play(decision_player(models, scripted(bodies, []), max_options=26), many_request())
-    assert response.usage is None
+def test_decision_more_pieces_than_max_options_fails_loudly_without_a_query(models):
+    sent = []
+    player = decision_player(models, scripted({}, sent), max_options=2)
+    with pytest.raises(TransportError, match="pieces to choose from exceed max_options 2"):
+        play(player, GROUPED)
+    assert not sent
 
 
-def test_decision_other_in_the_last_group_is_a_format_error(models):
-    bodies = [{"action": "move", "move": "other", "offer_draw": "no"}, {"move": "other"}]
-    response = play(decision_player(models, scripted(bodies, []), max_options=26), many_request())
-    assert response.answer is None
-    assert "invalid answer to 'move': 'other'" in response.format_error
-
-
-def test_decision_server_error_on_a_later_query_fails_loudly(models):
-    replies = iter(
-        [
-            httpx.Response(200, json={"action": "move", "move": "other", "offer_draw": "no"}),
-            httpx.Response(500, text="a question has 2 to 26 options"),
-        ]
-    )
-    player = decision_player(models, lambda request: next(replies), max_options=26)
+def test_decision_server_error_on_a_grouped_query_fails_loudly(models):
+    handler = lambda request: httpx.Response(500, text="a question has 2 to 26 options")  # noqa: E731
+    player = decision_player(models, handler, max_options=8)
     with pytest.raises(TransportError, match="HTTP 500: a question has 2 to 26 options"):
-        play(player, many_request())
+        play(player, GROUPED)
+
+
+@pytest.mark.parametrize("max_options", [2, 3, 7, 26])
+def test_decision_every_question_fits_max_options_and_every_move_is_offered_once(
+    models, max_options
+):
+    rng = random.Random(max_options)
+    for _ in range(100):
+        sizes = [rng.choice([1, 2, 3, max_options, max_options + 1, 2 * max_options + 3])
+                 for _ in range(rng.randint(1, 16))]  # fmt: skip
+        groups = {
+            f"piece{p}": {f"p{p}m{m}": f"P{p}-{m}" for m in range(size)}
+            for p, size in enumerate(sizes)
+        }
+        legal = {move: label for moves in groups.values() for move, label in moves.items()}
+        by_label = {label: move for move, label in legal.items()}
+        request = TurnRequest(PROMPT, legal, move_groups=groups)
+        sent = []
+        handler = scripted({"action": "resign"}, sent)
+        player = decision_player(models, handler, max_options=max_options)
+        options_needed = sum(math.ceil(size / max_options) for size in sizes)
+        if len(legal) > max_options and options_needed > max_options:
+            with pytest.raises(TransportError):
+                play(player, request)
+            continue
+        play(player, request)
+        questions = sent[0]
+        assert all(2 <= len(q["criteria"]) <= max_options for q in questions.values())
+        if len(legal) <= max_options:
+            assert "piece" not in questions
+            continue
+        # Each option's moves: its own move question, or the single move it names.
+        offered = [
+            list(questions[f"move_{key}"]["criteria"])
+            if f"move_{key}" in questions
+            else [by_label[description]]
+            for key, description in questions["piece"]["criteria"].items()
+        ]
+        assert [move for moves in offered for move in moves] == list(legal)
+        assert len(questions) == 3 + sum(len(moves) > 1 for moves in offered)
+        for p, size in enumerate(sizes):
+            parts = [len(m) for m in offered if m[0].startswith(f"p{p}m")]
+            assert len(parts) == math.ceil(size / max_options)
+            assert max(parts) - min(parts) <= 1
 
 
 # --- scripted fake ---

@@ -76,6 +76,11 @@ class Game[S](ABC):
     def legal_moves(self, state: S) -> dict[str, str]:
         """Legal moves as `{id: label}`."""
 
+    def move_groups(self, state: S) -> dict[str, dict[str, str]]:
+        """The legal moves grouped as `{group key: {id: label}}`, one group per piece where
+        the game has pieces; keys are identifiers (letters, digits, `_`)."""
+        return {"all": self.legal_moves(state)}
+
     @abstractmethod
     def parse_move(self, state: S, text: str) -> str:
         """Turn a model's move text into a legal move id.

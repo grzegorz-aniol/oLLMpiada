@@ -1,6 +1,6 @@
 """What a player receives each turn and what it returns."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -23,6 +23,8 @@ class TurnRequest:
     prompt: Prompt
     legal_moves: dict[str, str]
     draw_offered: bool = False
+    move_groups: dict[str, dict[str, str]] = field(default_factory=dict)
+    """The legal moves as the game groups them (`Game.move_groups`); empty means one group."""
 
 
 @dataclass(frozen=True)
@@ -35,10 +37,7 @@ class Usage:
 
 @dataclass(frozen=True)
 class TurnResponse:
-    """A player's answer to one turn request, from one or more model calls.
-
-    `answer` is None when the reply did not match the answer format.
-    """
+    """One model call. `answer` is None when the reply did not match the answer format."""
 
     raw: str
     answer: TurnAnswer | None

@@ -205,7 +205,7 @@ class LiveView:
 
     def _game_stats_view(self, g: GameStats) -> Group:
         """Timers and move count of the current game, then per player: who is thinking,
-        current and total thinking time, and usage."""
+        current thinking time and legal moves, total thinking time, and usage."""
         now = self.clock()
         running = "running" if g.ended_at is None else "ended after"
         length = _duration((g.ended_at or now) - g.started_at)
@@ -217,7 +217,8 @@ class LiveView:
         # A game ending without a move (resignation, a stop) counts the last turn too.
         turn = (g.ended_at or now) - g.turn_started_at
         mover = 0 if self.game.side_to_move(self.board) is Side.FIRST else 1
-        numbers = ("Now", "Total", "Requests", "Tokens in", "Tokens out", "Reasoning")
+        legal = len(self.game.legal_moves(self.board))
+        numbers = ("Now", "Legal", "Total", "Requests", "Tokens in", "Tokens out", "Reasoning")
         table = Table(
             "",
             "Side",
@@ -235,6 +236,7 @@ class LiveView:
                 self.game.side_names[index],
                 name,
                 _duration(turn) if thinking else "",
+                str(legal) if thinking else "",
                 _duration(total),
                 str(stats.calls),
                 *_token_cells(stats),

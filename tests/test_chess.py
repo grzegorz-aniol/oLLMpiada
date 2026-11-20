@@ -33,6 +33,22 @@ def test_opening_position():
     assert game.outcome(state) is None
 
 
+def test_move_groups_are_one_per_origin_square_named_by_piece():
+    state = game.new_state()
+    groups = game.move_groups(state)
+    assert len(groups) == 10
+    assert groups["knight_g1"] == {"g1f3": "Nf3", "g1h3": "Nh3"}
+    assert groups["pawn_e2"] == {"e2e3": "e3", "e2e4": "e4"}
+    # Castling is the king's move; every legal move is in exactly one group.
+    state = chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1")
+    groups = game.move_groups(state)
+    assert {"e1g1": "O-O", "e1c1": "O-O-O"}.items() <= groups["king_e1"].items()
+    merged = {move: label for moves in groups.values() for move, label in moves.items()}
+    assert merged == game.legal_moves(state)
+    assert sum(map(len, groups.values())) == len(merged)
+    assert all(m[:2] == key[-2:] for key, moves in groups.items() for m in moves)
+
+
 def test_apply_returns_a_new_state():
     state = game.new_state()
     after = game.apply(state, "e2e4")

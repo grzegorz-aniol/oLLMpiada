@@ -62,7 +62,7 @@ class GameStarted:
 
 @dataclass(frozen=True)
 class AnswerReceived:
-    """Every answered turn request (a split decision turn is one), published before validation."""
+    """Every answered turn request, published before the answer is validated."""
 
     number: int
     side: Side
@@ -135,7 +135,9 @@ async def play_game[S](
                 draw_offered=draw_offered,
                 rejection=rejection,
             )
-            request = TurnRequest(game.prompt(ctx), game.legal_moves(state), draw_offered)
+            request = TurnRequest(
+                game.prompt(ctx), game.legal_moves(state), draw_offered, game.move_groups(state)
+            )
             try:
                 response = await _call(player, request, backoff_s)
             except TransportError as e:

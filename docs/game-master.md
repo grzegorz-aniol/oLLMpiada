@@ -21,6 +21,7 @@ interface, so the game master, players and UI never import chess directly:
 | `new_state()` | Starting position |
 | `side_to_move(state)` | Which `Side` (`first` / `second`; for chess White / Black) moves |
 | `legal_moves(state)` | Legal moves as `{id: label}`: a stable machine id (UCI `e2e4`) and a readable label (SAN `e4`) |
+| `move_groups(state)` | The legal moves grouped per piece as `{key: {id: label}}`, for decision players (see [answer formats](#answer-formats)); the base class returns one group `all`, chess one group per origin square keyed like `knight_g1` |
 | `parse_move(state, text)` | Turns a model's move text into a legal move id, or raises with a reason |
 | `apply(state, move_id)` | Next state |
 | `outcome(state)` | `None` while the game runs, else winner or draw with a reason |
@@ -68,9 +69,9 @@ an `aborted` turn. A retry's prompt quotes the rejected answer (up to 300
 characters) and the reason.
 
 - **Rule:** a request is one answered turn request, the unit of `Attempt`,
-  `AnswerReceived` and the live view's request count; a decision player's split
-  turn (see [answer formats](#answer-formats)) counts as one request however many
-  queries it sends.
+  `AnswerReceived` and the live view's request count. A decision player answers a
+  turn with one query, also when it asks for the piece first (see
+  [answer formats](#answer-formats)), so that turn is one request too.
 - **Decision:** every turn is a fresh, stateless request carrying the full state.
   There is no conversation history between turns: both players get the same
   information, context stays bounded, and decision models are stateless anyway.
@@ -165,7 +166,7 @@ question is a `choice`:
 | Question | Criteria |
 | --- | --- |
 | `action` | `move`, `resign`, plus `accept_draw` only while an offer is pending |
-| `move` | every legal move, keyed by its id (`e2e4`), described by its label (`e4`); split when it exceeds `max_options` (below) |
+| `move` | every legal move, keyed by its id (`e2e4`), described by its label (`e4`); replaced by `piece` and `move_<key>` past `max_options` (below) |
 | `offer_draw` | `yes`, `no` |
 
 The response must contain each choice under its question name, either at the top
@@ -178,26 +179,24 @@ that move.
 - **Sensitive:** a chess position can have more than 200 legal moves, and a
   decision server may limit the options per question (Basal's chat template
   accepts 2 to 26). A model with `max_options` (see
-  [model fields](configuration.md#model-fields)) gets its moves split as below;
-  without it, a refused question is a transport error that stops the game. Moves
-  are never silently dropped.
-- **Rule:** when the N legal moves exceed `max_options` L, the `move` question is
-  split over several queries. The moves, sorted by id so that moves sharing a
-  prefix (in chess, the origin square) stay adjacent, go into the fewest groups
-  k with (k-1)(L-1)+L >= N, as equal as possible with the larger groups last. Every
-  group but the last adds the option `other`, described by the labels of all
-  moves outside the group, so each question still shows every legal move; the
-  last group has no `other`, and no question has fewer than two options; a
-  legal move id equal to `other` raises an error instead of colliding with it. A
-  group boundary may still split one origin square's moves, since equal group
-  sizes take precedence. The first query asks `action`, `offer_draw` and the
-  first group; each later query asks only the next group's `move`, and only after
-  the answer `other`. An action
-  other than `move` ends the turn after the first query. The queries make one
-  turn: one response with the replies' raw text joined and their time and usage
-  summed (usage unknown when any query reports none). A bad answer in any query
-  is a format error for the whole turn, and its retry starts again from the
-  first query.
+  [model fields](configuration.md#model-fields)) gets its moves asked per piece as
+  below; without it, a refused question is a transport error that stops the game.
+  Moves are never silently dropped.
+- **Rule:** when the N legal moves exceed `max_options` L, the one query asks the
+  piece first. Its questions are `action`, `offer_draw`, `piece` and one
+  `move_<key>` per piece. `piece` ("Which piece do you move?") has one option per
+  group from the game's `move_groups`, keyed by the group key and described by
+  the group's move labels (`knight_g1`: `Nf3, Nh3`); `move_<key>` offers only that
+  group's moves. A group with more than L moves becomes groups `<key>_1`,
+  `<key>_2`, ... of near-equal size, the fewest that fit. A group with a single
+  move has no move question, since one option tells nothing: choosing it in
+  `piece` plays that move. The answer to the chosen group's move question is
+  played and the other move questions are ignored; an answer outside the chosen
+  group is a format error, and the retry asks the whole query again. N > L always
+  gives at least two groups, so `piece` never has fewer than two options; more
+  groups than L raise a transport error that stops the game, since `piece` cannot
+  be asked (in chess that needs L well below 26). Every such turn logs a warning
+  naming the model, N and the number of groups.
 
 ## Validation and retries
 

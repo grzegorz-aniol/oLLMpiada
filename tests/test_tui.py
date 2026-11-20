@@ -325,7 +325,7 @@ def after(*moves: str) -> chess.Board:
     return board
 
 
-def test_game_stats_show_timers_moves_thinker_times_and_usage_under_the_board(tmp_path):
+def test_game_stats_show_timers_moves_thinker_times_legal_moves_and_usage(tmp_path):
     clock = FakeClock()
     view, _ = started_game(tmp_path, clock)
     clock.advance(5)
@@ -338,15 +338,18 @@ def test_game_stats_show_timers_moves_thinker_times_and_usage_under_the_board(tm
     results = next(i for i, line in enumerate(lines) if "Results" in line)
     assert board_bottom < stats < results
     assert lines[stats] == "Started 14:03:12, running 0:12 | 1 move completed"
-    assert lines[stats + 2].split()[:4] == ["Side", "Player", "Now", "Total"]
+    assert lines[stats + 2].split()[:5] == ["Side", "Player", "Now", "Legal", "Total"]
     assert thinker(lines) == "model-b"
+    # Only the thinking player shows its turn time and legal moves (20 for Black after 1. e4).
     assert row(lines, "model-a") == ["White", "model-a", "0:05", "1", "120", "30", "7"]
-    assert row(lines, "model-b") == ["Black", "model-b", "0:07", "0:07", "0", "–", "–", "–"]
+    assert row(lines, "model-b") == [
+        "Black", "model-b", "0:07", "20", "0:07", "0", "–", "–", "–"
+    ]  # fmt: skip
 
     clock.advance(60)
     lines = render(view).splitlines()
     assert "Started 14:03:12, running 1:12 | 1 move completed" in lines
-    assert row(lines, "model-b")[2:4] == ["1:07", "1:07"]
+    assert row(lines, "model-b")[2:5] == ["1:07", "20", "1:07"]
 
 
 def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_path):
@@ -357,7 +360,7 @@ def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_pat
     view.handle(AnswerReceived(1, Side.FIRST, "model-a", 4.0, Usage(100, 10, 0)))
     clock.advance(4)
     lines = render(view).splitlines()
-    assert thinker(lines) == "model-a" and row(lines, "model-a")[2:4] == ["0:07", "0:07"]
+    assert thinker(lines) == "model-a" and row(lines, "model-a")[2:5] == ["0:07", "20", "0:07"]
     view.handle(MoveMade(1, Side.FIRST, "model-a", "e4", after("e4"), draw_offered=False))
     clock.advance(2)
     view.handle(MoveMade(1, Side.SECOND, "model-b", "e5", after("e4", "e5"), draw_offered=False))
@@ -366,10 +369,10 @@ def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_pat
     assert any("2 moves completed" in line for line in lines)
     assert thinker(lines) == "model-a"
     # The total adds the running turn to the finished ones; the idle player has no turn time.
-    assert row(lines, "model-a")[2:4] == ["0:01", "0:08"]
+    assert row(lines, "model-a")[2:5] == ["0:01", "29", "0:08"]
     assert row(lines, "model-b")[2:3] == ["0:02"]
     # One of the two answers reported no usage, so the totals are lower bounds.
-    assert row(lines, "model-a")[4:] == ["2", "≥", "100", "≥", "10", "≥", "0"]
+    assert row(lines, "model-a")[5:] == ["2", "≥", "100", "≥", "10", "≥", "0"]
 
 
 def test_game_stats_never_show_unreported_reasoning_as_zero(tmp_path):

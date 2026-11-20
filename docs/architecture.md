@@ -127,13 +127,14 @@ clock), how long it has run and the number of moves completed. Under it, a table
 has one row per player in this game's side order, which swaps from game to game
 (see [sides alternate](game-master.md#turn-loop)): a `▶` marker on the player who
 is thinking (the side to move), side and player, `Now` (how long the current turn
-has run, empty for the other player), `Total` (the player's turn times in this game, the running turn
+has run, empty for the other player), `Legal` (the number of legal moves of the running turn,
+computed from the board, empty for the other player), `Total` (the player's turn times in this game, the running turn
 included, like a chess clock), then the requests (counted as defined in
 [game master](game-master.md#turn-loop)) and the input, output and reasoning tokens. A turn's time
 covers the whole turn, retries included, and restarts with each move. Token
 counts not reported show as `–`, never as zero, and as `≥ n` when only some
 answers reported them. When the game ends or the competition stops, the timers
-freeze, the marker and `Now` disappear, and the last turn stays in its player's
+freeze, the marker, `Now` and `Legal` disappear, and the last turn stays in its player's
 `Total`.
 
 Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
@@ -143,7 +144,9 @@ renderers: `LiveView` (subscribes to runner events; the CLI refreshes Rich `Live
 after each event and once a second from the event loop, with no refresh thread,
 so timers tick while a model thinks but a render never interleaves with an event
 update; timers are computed at render time from the view's `clock`, which tests
-replace; log warnings go through the same console so they print above the view),
+replace; log warnings, such as a decision player asking
+[per piece](game-master.md#answer-formats), go through the same console so they
+print above the view),
 `results_table`, `stats_table`, `summary_lines` (status, totals
 and the odd-game imbalance) and `PlainOutput`. `show` reuses the same tables.
 

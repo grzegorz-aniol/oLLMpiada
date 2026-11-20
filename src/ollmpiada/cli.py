@@ -108,7 +108,8 @@ def _probe(
     prompt = game.prompt(game.context(state, turn=1, max_turns=DEFAULT_MAX_TURNS))
     console.print(f"Probing {name} with the opening position of {game.name}...")
     try:
-        response = asyncio.run(player.play(TurnRequest(prompt, legal)))
+        request = TurnRequest(prompt, legal, move_groups=game.move_groups(state))
+        response = asyncio.run(player.play(request))
     except TransportError as e:
         console.print(f"[red]Transport error:[/red] {escape(str(e))}", highlight=False)
         return 1

@@ -1,17 +1,20 @@
 """Decision player: a SystemOne endpoint answering choice questions about the prompt."""
 
+import logging
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 import httpx
 
-from ollmpiada.config import Model
+from ollmpiada.config import Model, ModelSpec
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
+
+log = logging.getLogger(__name__)
 
 WRAPPERS = ("answers", "results", "result", "output", "data", "predictions")
 CHOICE_FIELDS = ("choice", "value", "answer", "selected", "result")
-OTHER = "other"
+PIECE = "piece"
 
 
 class DecisionPlayer:
@@ -29,121 +32,138 @@ class DecisionPlayer:
         self._transport = transport
 
     async def play(self, request: TurnRequest) -> TurnResponse:
-        """Asks one query, or several when the moves are split; returns them as one response."""
-        async with httpx.AsyncClient(timeout=self._timeout_s, transport=self._transport) as client:
-            queries = _Queries(client, self._model, request.prompt.text)
-            groups = _move_groups(request.legal_moves, self._model.spec.max_options)
-            answer, format_error = None, None
-            try:
-                answer = await _decide(queries, request, groups)
-            except ValueError as e:
-                format_error = str(e)
-        return queries.response(answer, format_error)
+        """Asks one query; moves past `max_options` are asked per piece within it."""
+        groups = _piece_groups(request, self._model.spec)
+        questions = _questions(request, groups)
+        raw, body, elapsed_s = await self._ask(request.prompt.text, questions)
+        answer, format_error = None, None
+        try:
+            answer = _decide(_answers(body, set(questions)), questions, request, groups)
+        except ValueError as e:
+            format_error = str(e)
+        return TurnResponse(raw, answer, elapsed_s, _usage(body), format_error)
 
-
-class _Queries:
-    """The SystemOne calls of one turn, kept so their raw text, time and usage add up."""
-
-    def __init__(self, client: httpx.AsyncClient, model: Model, state: str) -> None:
-        self._client = client
-        self._model = model
-        self._state = state
-        self._raws: list[str] = []
-        self._usages: list[Usage | None] = []
-        self._elapsed_s = 0.0
-
-    async def ask(self, questions: dict[str, dict]) -> Mapping:
-        """Sends one query and returns its answers.
+    async def _ask(self, state: str, questions: dict[str, dict]) -> tuple[str, object, float]:
+        """The reply's raw text, its JSON body (None when it is not JSON) and the time taken.
 
         Raises:
             TransportError: The call failed or the server reported an error.
-            ValueError: The reply does not match the answer format.
         """
-        payload = {"model": self._model.spec.model, "state": self._state, "questions": questions}
+        payload = {"model": self._model.spec.model, "state": state, "questions": questions}
         headers = {"Authorization": f"Bearer {self._model.token}"} if self._model.token else {}
-        start = time.perf_counter()
-        try:
-            response = await self._client.post(
-                self._model.provider.url, json=payload, headers=headers
-            )
-        except httpx.HTTPError as e:
-            raise TransportError(f"{type(e).__name__}: {e}") from e
-        self._elapsed_s += time.perf_counter() - start
+        async with httpx.AsyncClient(timeout=self._timeout_s, transport=self._transport) as client:
+            start = time.perf_counter()
+            try:
+                response = await client.post(
+                    self._model.provider.url, json=payload, headers=headers
+                )
+            except httpx.HTTPError as e:
+                raise TransportError(f"{type(e).__name__}: {e}") from e
+            elapsed_s = time.perf_counter() - start
         if not response.is_success:
             # Includes a server refusing a question with too many options: fail loudly.
             raise TransportError(f"HTTP {response.status_code}: {response.text[:300]}")
-        self._raws.append(response.text)
-        body = response.json()
-        self._usages.append(_usage(body))
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
         if isinstance(body, Mapping) and body.get("error"):
             raise TransportError(f"server error: {str(body['error'])[:300]}")
-        return _answers(body, set(questions))
+        return response.text, body, elapsed_s
 
-    def response(self, answer: TurnAnswer | None, format_error: str | None) -> TurnResponse:
-        return TurnResponse(
-            raw="\n".join(self._raws),
-            answer=answer,
-            elapsed_s=self._elapsed_s,
-            usage=_total(self._usages, calls=len(self._raws)),
-            format_error=format_error,
+
+def _piece_groups(request: TurnRequest, spec: ModelSpec) -> dict[str, dict[str, str]]:
+    """The options of the piece question, `{key: {id: label}}`; empty when every legal
+    move fits one move question.
+
+    A piece with more moves than `max_options` becomes several groups of near-equal size.
+    More legal moves than `max_options` always give at least two groups.
+
+    Raises:
+        TransportError: More groups than `max_options`; the piece question cannot be asked.
+    """
+    limit = spec.max_options
+    count = len(request.legal_moves)
+    if limit is None or count <= limit:
+        return {}
+    groups: dict[str, dict[str, str]] = {}
+    split = 0
+    for key, moves in (request.move_groups or {"all": request.legal_moves}).items():
+        chunks = _chunks(moves, limit)
+        if len(chunks) == 1:
+            groups[key] = moves
+        else:
+            split += 1
+            groups.update({f"{key}_{i}": chunk for i, chunk in enumerate(chunks, 1)})
+    if len(groups) > limit:
+        raise TransportError(
+            f"{len(groups)} pieces to choose from exceed max_options {limit} of {spec.id!r}"
         )
+    log.warning(
+        "%s: %d legal moves exceed max_options %d; asking for the piece first in %d groups;"
+        " pieces split further: %d",
+        spec.id,
+        count,
+        limit,
+        len(groups),
+        split,
+    )
+    return groups
 
 
-async def _decide(
-    queries: _Queries, request: TurnRequest, groups: list[dict[str, str]]
+def _chunks(moves: dict[str, str], limit: int) -> list[dict[str, str]]:
+    """`moves` in the fewest chunks of at most `limit`, sizes differing by at most one."""
+    items = list(moves.items())
+    count = math.ceil(len(items) / limit)
+    size, larger = divmod(len(items), count)
+    chunks, start = [], 0
+    for i in range(count):
+        end = start + size + (i < larger)
+        chunks.append(dict(items[start:end]))
+        start = end
+    return chunks
+
+
+def _questions(request: TurnRequest, groups: dict[str, dict[str, str]]) -> dict[str, dict]:
+    """`action` and `offer_draw`, then either one `move` question or the piece question
+    with one move question per group; a single move needs no question of its own, since a
+    one-option question tells nothing and SystemOne templates refuse it."""
+    questions = _turn_questions(request)
+    if not groups:
+        if len(request.legal_moves) > 1:
+            questions["move"] = _move_question(request.legal_moves)
+        return questions
+    pieces = {key: ", ".join(moves.values()) for key, moves in groups.items()}
+    questions[PIECE] = _choice("Which piece do you move? Each option lists its moves.", pieces)
+    for key, moves in groups.items():
+        if len(moves) > 1:
+            questions[_move_name(key)] = _move_question(moves)
+    return questions
+
+
+def _decide(
+    answers: Mapping,
+    questions: dict[str, dict],
+    request: TurnRequest,
+    groups: dict[str, dict[str, str]],
 ) -> TurnAnswer:
     """Raises ValueError for an answer that does not match the questions asked."""
-    asked = _turn_questions(request)
-    if groups:
-        asked["move"] = _move_question(groups[0])
-    answers = await queries.ask(asked)
-    action = _selected(answers, "action", asked["action"]["criteria"])
+    action = _selected(answers, "action", questions["action"]["criteria"])
     if action != "move":
         return TurnAnswer(action=action)
-    offer_draw = _selected(answers, "offer_draw", asked["offer_draw"]["criteria"]) == "yes"
-    move = next(iter(request.legal_moves))  # the only legal move when no group is asked
-    for i, group in enumerate(groups):
-        if i > 0:
-            answers = await queries.ask({"move": _move_question(group)})
-        move = _selected(answers, "move", group)
-        if move != OTHER:
-            break
+    offer_draw = _selected(answers, "offer_draw", questions["offer_draw"]["criteria"]) == "yes"
+    if groups:
+        piece = _selected(answers, PIECE, groups)
+        name, moves = _move_name(piece), groups[piece]
+    else:
+        name, moves = "move", request.legal_moves
+    # The answers to the move questions of other pieces are ignored.
+    move = next(iter(moves)) if len(moves) == 1 else _selected(answers, name, moves)
     return TurnAnswer(action="move", move=move, offer_draw=offer_draw)
 
 
-def _move_groups(legal_moves: Mapping[str, str], max_options: int | None) -> list[dict[str, str]]:
-    """Criteria of the move questions, asked in order until one is not answered `other`.
-
-    One group when the moves fit `max_options`, none when a single move is legal (a
-    one-option question is meaningless and SystemOne templates refuse it).
-
-    Raises:
-        ValueError: The moves need splitting and one of their ids is `other`.
-    """
-    count = len(legal_moves)
-    if count == 1:
-        return []
-    if max_options is None or count <= max_options:
-        return [dict(legal_moves)]
-    if OTHER in legal_moves:
-        raise ValueError(f"a legal move id is {OTHER!r}, the option reserved for split moves")
-    # Every group but the last spends one option on `other`.
-    groups = 1 + math.ceil((count - max_options) / (max_options - 1))
-    small, larger = divmod(count, groups)
-    # Sorted ids keep moves sharing a prefix adjacent (in chess, UCI, one origin
-    # square); a group boundary may still split them, since equal sizes win.
-    ids = sorted(legal_moves)
-    # The larger groups go last, where no `other` takes an option.
-    sizes = [small] * (groups - larger) + [small + 1] * larger
-    criteria, start = [], 0
-    for i, size in enumerate(sizes):
-        choices = {move: legal_moves[move] for move in ids[start : start + size]}
-        start += size
-        if i < groups - 1:
-            unlisted = [legal_moves[move] for move in ids if move not in choices]
-            choices[OTHER] = "A move not listed in this question: " + ", ".join(unlisted)
-        criteria.append(choices)
-    return criteria
+def _move_name(piece: str) -> str:
+    return f"move_{piece}"
 
 
 def _turn_questions(request: TurnRequest) -> dict[str, dict]:
@@ -180,7 +200,7 @@ def _answers(body: object, names: set[str]) -> Mapping:
     raise ValueError("the response has no answers to the questions")
 
 
-def _selected(answers: Mapping, question: str, allowed: Mapping[str, str]) -> str:
+def _selected(answers: Mapping, question: str, allowed: Collection[str]) -> str:
     value = answers.get(question)
     for _ in range(3):
         if not isinstance(value, Mapping):
@@ -206,16 +226,3 @@ def _usage(body: object) -> Usage | None:
     if not isinstance(reasoning_tokens, int):
         reasoning_tokens = None
     return Usage(input_tokens, output_tokens, reasoning_tokens)
-
-
-def _total(usages: list[Usage | None], calls: int) -> Usage | None:
-    """The sum of every call's usage; unknown when any call reported none."""
-    known = [u for u in usages if u is not None]
-    if len(known) < calls:
-        return None
-    reasoning = [u.reasoning_tokens for u in known]
-    return Usage(
-        sum(u.input_tokens for u in known),
-        sum(u.output_tokens for u in known),
-        None if None in reasoning else sum(r for r in reasoning if r is not None),
-    )

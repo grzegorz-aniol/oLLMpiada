@@ -50,6 +50,14 @@ def run(white, black, *, game=None, max_turns=50, events=None):
     return result, white, black
 
 
+def test_turn_request_carries_the_legal_moves_and_their_groups():
+    _, white, _ = run([RESIGN], [])
+    request = white.requests[0]
+    state = chess.Board()
+    assert request.legal_moves == ChessGame().legal_moves(state)
+    assert request.move_groups == ChessGame().move_groups(state)
+
+
 # --- end of game: one test per row of docs/game-master.md#end-of-game ---
 
 

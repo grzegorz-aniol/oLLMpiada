@@ -55,6 +55,16 @@ class ChessGame(Game[chess.Board]):
     def legal_moves(self, state: chess.Board) -> dict[str, str]:
         return {move.uci(): state.san(move) for move in state.legal_moves}
 
+    def move_groups(self, state: chess.Board) -> dict[str, dict[str, str]]:
+        """One group per origin square, keyed like `knight_g1`."""
+        groups: dict[str, dict[str, str]] = {}
+        for move in state.legal_moves:
+            piece = state.piece_type_at(move.from_square)
+            assert piece is not None
+            key = f"{chess.piece_name(piece)}_{chess.square_name(move.from_square)}"
+            groups.setdefault(key, {})[move.uci()] = state.san(move)
+        return groups
+
     def parse_move(self, state: chess.Board, text: str) -> str:
         legal = self.legal_moves(state)
         move_text = text.strip().rstrip("!?")
