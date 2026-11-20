@@ -1,5 +1,6 @@
 """What the user sees: Rich live view, results and statistics tables, plain lines for scripts."""
 
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -31,6 +32,7 @@ MOVE_LIST_LINES = 4
 COMPACT = {"box": box.SIMPLE_HEAD, "collapse_padding": True}
 REASON_SHOWN = 60
 UNKNOWN = "–"
+THINKING = "▶"
 
 
 def results_table(state: CompetitionState) -> Table:
@@ -130,6 +132,8 @@ class GameStats:
     started_at: datetime
     turn_started_at: datetime
     ended_at: datetime | None = None
+    # Wall-clock time of each player's finished turns, like a chess clock.
+    turn_totals: defaultdict[str, timedelta] = field(default_factory=lambda: defaultdict(timedelta))
 
 
 @dataclass
@@ -159,12 +163,14 @@ class LiveView:
             case AnswerReceived(player=player, elapsed_s=elapsed_s, usage=usage):
                 assert self.game_stats is not None
                 self.game_stats.stats[player].add_call(elapsed_s, usage)
-            case MoveMade(side=side, move=move, state=board, draw_offered=offered):
+            case MoveMade(side=side, player=player, move=move, state=board, draw_offered=offered):
                 self._note(side, move + (" (offers draw)" if offered else ""))
                 self.turn += 1
                 self.board = board
                 assert self.game_stats is not None
-                self.game_stats.turn_started_at = self.clock()
+                now = self.clock()
+                self.game_stats.turn_totals[player] += now - self.game_stats.turn_started_at
+                self.game_stats.turn_started_at = now
             case AnswerRejected(side=side, reason=reason, attempt=attempt):
                 reason = " ".join(reason.split())
                 reason = reason if len(reason) <= REASON_SHOWN else reason[:REASON_SHOWN] + "..."
@@ -198,7 +204,8 @@ class LiveView:
         return Text("\n").join(padding + lines)
 
     def _game_stats_view(self, g: GameStats) -> Group:
-        """Timers, move count, who is thinking and per-player usage of the current game."""
+        """Timers and move count of the current game, then per player: who is thinking,
+        current and total thinking time, and usage."""
         now = self.clock()
         running = "running" if g.ended_at is None else "ended after"
         length = _duration((g.ended_at or now) - g.started_at)
@@ -206,24 +213,33 @@ class LiveView:
             f"Started {g.started_at:%H:%M:%S}, {running} {length}"
             f" | {self.turn} move{'' if self.turn == 1 else 's'} completed"
         )
-        if g.ended_at is None:
-            # Retries keep the clock running: it times the whole turn, not one request.
-            index = 0 if self.game.side_to_move(self.board) is Side.FIRST else 1
-            line.append(
-                f" | {self.game.side_names[index]} {g.players[index]} thinking "
-                + _duration(now - g.turn_started_at),
-                style="bold",
-            )
-        numbers = ("Requests", "Tokens in", "Tokens out", "Reasoning")
+        # Retries keep the turn clock running: it times the whole turn, not one request.
+        # A game ending without a move (resignation, a stop) counts the last turn too.
+        turn = (g.ended_at or now) - g.turn_started_at
+        mover = 0 if self.game.side_to_move(self.board) is Side.FIRST else 1
+        numbers = ("Now", "Total", "Requests", "Tokens in", "Tokens out", "Reasoning")
         table = Table(
+            "",
             "Side",
             Column("Player", overflow="fold"),
             *(Column(header, no_wrap=True) for header in numbers),
             **COMPACT,
         )
-        for side_name, name in zip(self.game.side_names, g.players, strict=True):
+        for index, name in enumerate(g.players):
+            moving = index == mover
+            thinking = moving and g.ended_at is None
+            total = g.turn_totals[name] + (turn if moving else timedelta())
             stats = g.stats[name]
-            table.add_row(side_name, name, str(stats.calls), *_token_cells(stats))
+            table.add_row(
+                THINKING if thinking else "",
+                self.game.side_names[index],
+                name,
+                _duration(turn) if thinking else "",
+                _duration(total),
+                str(stats.calls),
+                *_token_cells(stats),
+                style="bold" if thinking else "",
+            )
         return Group(line, table)
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:

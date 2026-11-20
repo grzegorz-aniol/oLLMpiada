@@ -122,15 +122,18 @@ one wrapped line numbered by move pair,
 `[✗ <attempt>: <reason>]`. It keeps a fixed height and shows its most recent
 lines, so the board never moves or gets pushed off.
 
-The game statistics cover the current game: when it started (wall clock) and how
-long it has run, the number of moves completed, who is thinking (side and
-player, the side to move) and for how long, and per player the requests (answered
-model calls, counted as in the statistics) and the input, output and reasoning
-tokens. The thinking timer covers the whole turn,
-retries included, and restarts with each move. Token counts not reported show as
-`–`, never as zero, and as `≥ n` when only some answers reported them. When the
-game ends or the competition stops, the timers freeze and the thinking part
-disappears.
+The game statistics cover the current game. One line shows when it started (wall
+clock), how long it has run and the number of moves completed. Under it, a table
+has one row per player: a `▶` marker on the player who is thinking (the side to
+move), side and player, `Now` (how long the current turn has run, empty for the
+other player), `Total` (the player's turn times in this game, the running turn
+included, like a chess clock), then the requests (answered model calls, counted
+as in the statistics) and the input, output and reasoning tokens. A turn's time
+covers the whole turn, retries included, and restarts with each move. Token
+counts not reported show as `–`, never as zero, and as `≥ n` when only some
+answers reported them. When the game ends or the competition stops, the timers
+freeze, the marker and `Now` disappear, and the last turn stays in its player's
+`Total`.
 
 Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
 two players must have different names, because statistics are kept per name; to

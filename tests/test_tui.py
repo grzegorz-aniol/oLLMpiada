@@ -295,8 +295,15 @@ class FakeClock:
 
 
 def row(lines: list[str], player: str) -> list[str]:
-    """The player's row in the game statistics: side name, then player name."""
-    return next(line.split() for line in lines if line.split()[1:2] == [player])
+    """The player's row in the game statistics from its side name on, without the marker."""
+    return next(
+        cells for line in lines if (cells := line.replace("▶", "").split())[1:2] == [player]
+    )
+
+
+def thinker(lines: list[str]) -> str | None:
+    """The player whose game statistics row carries the thinking marker."""
+    return next((line.split()[2] for line in lines if line.split()[:1] == ["▶"]), None)
 
 
 def started_game(tmp_path, clock):
@@ -318,7 +325,7 @@ def after(*moves: str) -> chess.Board:
     return board
 
 
-def test_game_stats_show_timers_moves_thinker_and_usage_under_the_board(tmp_path):
+def test_game_stats_show_timers_moves_thinker_times_and_usage_under_the_board(tmp_path):
     clock = FakeClock()
     view, _ = started_game(tmp_path, clock)
     clock.advance(5)
@@ -330,14 +337,16 @@ def test_game_stats_show_timers_moves_thinker_and_usage_under_the_board(tmp_path
     stats = next(i for i, line in enumerate(lines) if line.startswith("Started"))
     results = next(i for i, line in enumerate(lines) if "Results" in line)
     assert board_bottom < stats < results
-    assert lines[stats] == (
-        "Started 14:03:12, running 0:12 | 1 move completed | Black model-b thinking 0:07"
-    )
-    assert row(lines, "model-a") == ["White", "model-a", "1", "120", "30", "7"]
-    assert row(lines, "model-b") == ["Black", "model-b", "0", "–", "–", "–"]
+    assert lines[stats] == "Started 14:03:12, running 0:12 | 1 move completed"
+    assert lines[stats + 2].split()[:4] == ["Side", "Player", "Now", "Total"]
+    assert thinker(lines) == "model-b"
+    assert row(lines, "model-a") == ["White", "model-a", "0:05", "1", "120", "30", "7"]
+    assert row(lines, "model-b") == ["Black", "model-b", "0:07", "0:07", "0", "–", "–", "–"]
 
     clock.advance(60)
-    assert "running 1:12 | 1 move completed | Black model-b thinking 1:07" in render(view)
+    lines = render(view).splitlines()
+    assert "Started 14:03:12, running 1:12 | 1 move completed" in lines
+    assert row(lines, "model-b")[2:4] == ["1:07", "1:07"]
 
 
 def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_path):
@@ -347,21 +356,26 @@ def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_pat
     clock.advance(3)
     view.handle(AnswerReceived(1, Side.FIRST, "model-a", 4.0, Usage(100, 10, 0)))
     clock.advance(4)
-    assert "White model-a thinking 0:07" in render(view)
+    lines = render(view).splitlines()
+    assert thinker(lines) == "model-a" and row(lines, "model-a")[2:4] == ["0:07", "0:07"]
     view.handle(MoveMade(1, Side.FIRST, "model-a", "e4", after("e4"), draw_offered=False))
     clock.advance(2)
     view.handle(MoveMade(1, Side.SECOND, "model-b", "e5", after("e4", "e5"), draw_offered=False))
     clock.advance(1)
     lines = render(view).splitlines()
-    assert any("2 moves completed | White model-a thinking 0:01" in line for line in lines)
+    assert any("2 moves completed" in line for line in lines)
+    assert thinker(lines) == "model-a"
+    # The total adds the running turn to the finished ones; the idle player has no turn time.
+    assert row(lines, "model-a")[2:4] == ["0:01", "0:08"]
+    assert row(lines, "model-b")[2:3] == ["0:02"]
     # One of the two answers reported no usage, so the totals are lower bounds.
-    assert row(lines, "model-a") == ["White", "model-a", "2", "≥", "100", "≥", "10", "≥", "0"]
+    assert row(lines, "model-a")[4:] == ["2", "≥", "100", "≥", "10", "≥", "0"]
 
 
 def test_game_stats_never_show_unreported_reasoning_as_zero(tmp_path):
     view, _ = started_game(tmp_path, FakeClock())
     view.handle(AnswerReceived(1, Side.FIRST, "model-a", 1.0, Usage(100, 10, None)))
-    assert row(render(view).splitlines(), "model-a") == ["White", "model-a", "1", "100", "10", "–"]
+    assert row(render(view).splitlines(), "model-a")[-4:] == ["1", "100", "10", "–"]
 
 
 def test_game_stats_freeze_when_the_game_ends(tmp_path):
@@ -371,9 +385,9 @@ def test_game_stats_freeze_when_the_game_ends(tmp_path):
     clock.advance(30)
     lines = render(view).splitlines()
     assert "Started 14:03:12, ended after 0:00 | 4 moves completed" in lines
-    assert not any("thinking" in line for line in lines)
-    assert row(lines, "model-a") == ["White", "model-a", "3", "300", "30", "0"]
-    assert row(lines, "model-b") == ["Black", "model-b", "2", "200", "20", "0"]
+    assert thinker(lines) is None
+    assert row(lines, "model-a") == ["White", "model-a", "0:00", "3", "300", "30", "0"]
+    assert row(lines, "model-b") == ["Black", "model-b", "0:00", "2", "200", "20", "0"]
 
 
 def test_game_stats_of_a_stopped_game_stop_ticking(tmp_path):
@@ -383,5 +397,7 @@ def test_game_stats_of_a_stopped_game_stop_ticking(tmp_path):
     state.status = "stopped"
     view.handle(CompetitionFinished(state))
     clock.advance(30)
-    text = render(view)
-    assert "ended after 0:09 | 0 moves completed" in text and "thinking" not in text
+    lines = render(view).splitlines()
+    assert "Started 14:03:12, ended after 0:09 | 0 moves completed" in lines
+    # The interrupted turn still counts towards the total of the player who was thinking.
+    assert thinker(lines) is None and row(lines, "model-a")[2:3] == ["0:09"]
