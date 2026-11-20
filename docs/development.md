@@ -56,5 +56,5 @@ One source of truth serves Claude Code, Codex, OpenCode and Pi.
 
 ## Workflow
 
-Tasks live in [TASKS.md](../TASKS.md) at the repository root. Work on `main` or a
+Tasks live in `.local/TASKS.md` (local, not committed). Work on `main` or a
 short-lived branch; there are no releases.

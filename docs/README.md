@@ -72,7 +72,7 @@ authoritative.
   Requirements change only through an explicit human decision; after it, remove
   superseded wording everywhere in the same change. Never keep a file for history.
 - **Rule: not a backlog.** Plans, tasks and roadmaps live in the issue tracker
-  ([TASKS.md](../TASKS.md)). A document records what is and why, not what is to be done.
+  (`.local/TASKS.md`). A document records what is and why, not what is to be done.
 - **Rule: research is dated and frozen.** Snapshots go to [research](research/README.md)
   as `YYYY-MM-DD_slug.md` and are not updated afterwards. When a conclusion ships,
   record it in the owning subject document, which links the snapshot.

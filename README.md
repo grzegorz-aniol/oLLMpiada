@@ -44,8 +44,7 @@ uv run ollmpiada run qwen3-30b-local@high gpt-oss-120b@low --games 4
 
 ## Status
 
-Project skeleton: documentation and plan only. The MVP plan is in
-[TASKS.md](TASKS.md).
+Work in progress towards the MVP: `ollmpiada models` works; competitions do not yet.
 
 ## Documentation
 

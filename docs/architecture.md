@@ -103,7 +103,7 @@ move list with rejected attempts.
 
 Planned layout; replace this note with real entries as the modules land.
 
-- `src/ollmpiada/__init__.py` - `main()`: load settings, run the CLI.
+- `src/ollmpiada/__init__.py` - `main()`: load `.env`, configure logging, run the CLI.
 - `src/ollmpiada/cli.py` - argparse subcommands `models`, `probe`, `run`, `show`.
 - `src/ollmpiada/config.py` - settings, model config models and loader.
 - `src/ollmpiada/games/` - `base.py` (game interface, outcome types) and

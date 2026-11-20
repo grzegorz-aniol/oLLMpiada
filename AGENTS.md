@@ -14,7 +14,7 @@ maintenance policy. Read [conventions](docs/conventions.md) for every change, th
 only the subject document for the area you touch. Do not load every document or
 assume undocumented patterns.
 
-Work items live in [TASKS.md](TASKS.md). Tick a task in the same change that
+Work items live in `.local/TASKS.md` (local, not committed). Tick a task in the same change that
 completes it; add new tasks there, never in `docs/`.
 
 ## Documentation
@@ -29,7 +29,7 @@ completes it; add new tasks there, never in `docs/`.
   `**Sensitive:**`; elsewhere link to it instead of copying it.
 - Split a document past about 300 lines of mixed topics; restructure as a side
   effect of the current task and fix inbound links in the same change.
-- Plans and tasks live in `TASKS.md`, not in `docs/`. Research goes to
+- Plans and tasks live in `.local/TASKS.md`, not in `docs/`. Research goes to
   `docs/research/` as dated, frozen snapshots.
 
 ## Commands
