@@ -55,6 +55,14 @@ interface, so the game master, players and UI never import chess directly:
 5. Check the end of the game (see [end of game](#end-of-game)); otherwise switch
    sides.
 
+`play_game` in `game_master.py` runs this loop and publishes `GameStarted`,
+`MoveMade`, `AnswerRejected` and `GameFinished` events to a callback. Its
+`GameResult` holds the outcome (or the error of an aborted game), the final state
+and one `Turn` per answered turn with every attempt's raw answer, time, tokens and
+rejection reason; an aborted game keeps the attempts of its unfinished turn as
+an `aborted` turn. A retry's prompt quotes the rejected answer (up to 300
+characters) and the reason.
+
 - **Decision:** every turn is a fresh, stateless request carrying the full state.
   There is no conversation history between turns: both players get the same
   information, context stays bounded, and decision models are stateless anyway.
@@ -160,15 +168,15 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
 
 ## End of game
 
-| Condition | Result |
-| --- | --- |
-| Checkmate | Win for the side that mates |
-| Resignation | Win for the opponent |
-| Draw offer accepted | Draw |
-| Stalemate, insufficient material, 75-move rule, fivefold repetition | Draw |
-| Threefold repetition, 50-move rule | Draw, claimed automatically by the game master |
-| Turn limit reached (both sides made `max_turns` moves) | Draw |
-| Third rejected answer in one turn | Win for the opponent |
+| Condition | Result | Reason recorded |
+| --- | --- | --- |
+| Checkmate | Win for the side that mates | `checkmate` |
+| Resignation | Win for the opponent | `resignation` |
+| Draw offer accepted | Draw | `draw agreed` |
+| Stalemate, insufficient material, 75-move rule, fivefold repetition | Draw | `stalemate`, `insufficient material`, `75-move rule`, `fivefold repetition` |
+| Threefold repetition, 50-move rule | Draw, claimed automatically by the game master | `threefold repetition`, `50-move rule` |
+| Turn limit reached (both sides made `max_turns` moves) | Draw | `turn limit` |
+| Third rejected answer in one turn | Win for the opponent | `illegal answers` |
 
 - **Decision:** claimable draws are claimed automatically, so models cannot shuffle
   pieces until the turn limit. Only a repetition or 50-move count that has actually
@@ -178,6 +186,8 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
   of the MVP.
 - A draw offer stays open for the opponent's next answer only; any move by the
   opponent declines it.
+- Fivefold repetition and the 75-move rule stay in the table for completeness:
+  from a normal start the threefold and 50-move claims always come first.
 
 ## Statistics
 
