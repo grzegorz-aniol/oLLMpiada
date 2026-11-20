@@ -105,6 +105,9 @@ def create_llm_player(
         ai_model = OpenAIChatModel(model.spec.model, provider=provider, profile=profile)
         if effort:
             settings["openai_reasoning_effort"] = effort
+        if model.spec.reasoning_budget:
+            # llama.cpp's field name; other servers ignore it or use their own (configuration docs).
+            settings["extra_body"] = {"reasoning_budget_tokens": model.spec.reasoning_budget}
         omit = openai.Omit()
     if not token:
         # Without a token no Authorization header is sent (both SDKs send the key as a

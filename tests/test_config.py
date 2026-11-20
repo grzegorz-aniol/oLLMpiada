@@ -58,6 +58,15 @@ def test_provider_timeout_and_model_max_tokens(tmp_path, models_data):
     assert models["local-llm"].spec.max_tokens == 2048
 
 
+def test_openai_model_takes_reasoning_budget_below_max_tokens(tmp_path, models_data):
+    models_data["models"][0].update(max_tokens=8192, reasoning_budget=4096)
+    models_data["models"][1]["reasoning_budget"] = 100_000
+    models = load_models(write(tmp_path, models_data), {"TEST_HOSTED_KEY": "k"})
+    assert models["local-llm"].spec.reasoning_budget == 4096
+    assert models["hosted-llm"].spec.reasoning_budget == 100_000
+    assert models["claude"].spec.reasoning_budget is None
+
+
 def test_systemone_model_takes_max_options(tmp_path, models_data):
     models_data["models"][3]["max_options"] = 26
     models = load_models(write(tmp_path, models_data), {})
@@ -94,6 +103,16 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         (lambda d: d["models"][3].update(max_tokens=100), "it takes no max_tokens"),
         (lambda d: d["models"][0].update(max_tokens=0), r"max_tokens\s+Input should be greater"),
         (lambda d: d["providers"][0].update(timeout_s=0), r"timeout_s\s+Input should be greater"),
+        (lambda d: d["models"][2].update(reasoning_budget=2048), "it takes no reasoning_budget"),
+        (lambda d: d["models"][3].update(reasoning_budget=2048), "it takes no reasoning_budget"),
+        (
+            lambda d: d["models"][0].update(reasoning_budget=0),
+            r"reasoning_budget\s+Input should be greater",
+        ),
+        (
+            lambda d: d["models"][0].update(reasoning_budget=1024, max_tokens=1024),
+            "reasoning_budget must be below max_tokens",
+        ),
         (lambda d: d["models"][0].pop("model"), r"models\.0\.model\s+Field required"),
         (lambda d: d["providers"][0].update(token="leak"), r"providers\.0\.token\s+Extra inputs"),
     ],
@@ -111,6 +130,10 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "systemone-with-max-tokens",
         "max-tokens-below-one",
         "timeout-not-positive",
+        "anthropic-with-reasoning-budget",
+        "systemone-with-reasoning-budget",
+        "reasoning-budget-below-one",
+        "reasoning-budget-not-below-max-tokens",
         "missing-field",
         "unknown-field",
     ],

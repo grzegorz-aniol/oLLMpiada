@@ -32,7 +32,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   ],
   "models": [
     {"id": "qwen3-30b-local", "provider": "local-llama", "model": "qwen3-30b-a3b",
-     "reasoning_efforts": ["none", "low", "medium", "high"]},
+     "reasoning_efforts": ["none", "low", "medium", "high"],
+     "max_tokens": 8192, "reasoning_budget": 4096},
     {"id": "gpt-oss-120b", "provider": "openrouter", "model": "openai/gpt-oss-120b",
      "reasoning_efforts": ["low", "medium", "high"], "max_tokens": 16384},
     {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
@@ -83,6 +84,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `model` | yes | Model name sent to the provider |
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
 | `max_tokens` | no | LLM models only: most output tokens per call, reasoning included, at least 1; sent as the `max_tokens` request field for both LLM APIs. Missing means ollmpiada sets no cap (for `anthropic-messages` PydanticAI then sends the model's maximum output) |
+| `reasoning_budget` | no | `openai-completions` models only: most reasoning tokens per call, at least 1 and below `max_tokens` when both are set; sent as the `reasoning_budget_tokens` request field. Missing means nothing is sent |
 | `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master.md#answer-formats) in the same query. Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
@@ -99,7 +101,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   are mapped per Claude model (adaptive thinking with that effort on current
   models, a token budget on older ones). `systemone` models take no effort, and
   the loader rejects one that lists any, or `max_tokens`; likewise it rejects
-  `max_options` on a model of any other `api`.
+  `max_options` on a model of any other `api`, and `reasoning_budget` on a model
+  of any `api` but `openai-completions`.
 - **Sensitive:** `max_tokens` counts reasoning tokens too, so a low cap on a
   reasoning model can cut the answer off before it is written.
 - **Decision:** for `openai-completions` the cap is sent as the `max_tokens`
@@ -110,6 +113,25 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   `max_tokens` for o-series reasoning models, so point such a model at another
   provider or leave its `max_tokens` unset. `anthropic-messages` sends
   `max_tokens` natively.
+- **Decision:** `reasoning_budget` caps only the reasoning part, so a reasoning
+  model under a `max_tokens` cap keeps room for its answer. It is sent as
+  `reasoning_budget_tokens`, llama.cpp's per-request field, which overrides the
+  server's `--reasoning-budget`; once the budget is spent the server closes the
+  thinking block and the answer follows. The effort is still sent alongside, and
+  `none` makes the budget moot. Reasoning counts towards `max_tokens`, hence the
+  loader requires the budget to be lower. The loader rejects the field for every
+  `anthropic-messages` model: current Claude models refuse a thinking token
+  budget (PydanticAI's `anthropic_disallows_budget_thinking` profile flag), and
+  on older ones the effort already maps to a budget.
+- **Sensitive:** `reasoning_budget_tokens` is not part of the OpenAI API. Servers
+  that name their budget differently (OpenRouter takes `reasoning.max_tokens`)
+  or have none ignore it, and llama.cpp applies it only to models whose chat
+  template marks the thinking block. A proxy must forward unknown request fields:
+  per Bifrost's request-options docs, its standard route (`/v1`) collects them as
+  extra parameters, forwarded when passthrough is on
+  (`x-bf-passthrough-extra-params: true`), while its OpenAI integration route
+  (`/openai/v1`) takes such fields only nested under `extra_params`, so a
+  top-level budget sent there does not reach the server.
 - **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
   know how to send thinking, so a proxy route prefix is stripped for that lookup
   (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
@@ -118,7 +140,8 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 
 The loader validates the file with Pydantic at startup: unique ids, existing
 provider names, known `api` and effort values, `max_options` of at least 2,
-`max_tokens` of at least 1, a positive `timeout_s`. An
+`max_tokens` of at least 1, a `reasoning_budget` of at least 1 and below
+`max_tokens`, a positive `timeout_s`. An
 invalid file stops the app with a message naming the bad entry.
 
 ## Environment

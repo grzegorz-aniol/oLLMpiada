@@ -260,6 +260,27 @@ def test_llm_max_tokens_caps_openai_output(models, max_tokens, sent):
     assert "max_completion_tokens" not in bodies[0]
 
 
+@pytest.mark.parametrize("budget", [None, 1024])
+def test_llm_reasoning_budget_goes_out_as_llama_cpp_field(models, budget):
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=CHAT_COMPLETION)
+
+    model = models["local-llm"]
+    model = dataclasses.replace(
+        model, spec=model.spec.model_copy(update={"reasoning_budget": budget})
+    )
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    play(create_llm_player("p", model, effort="high", timeout_s=5, http_client=client))
+    if budget is None:
+        assert "reasoning_budget_tokens" not in bodies[0]
+    else:
+        assert bodies[0]["reasoning_budget_tokens"] == budget
+    assert bodies[0]["reasoning_effort"] == "high"
+
+
 @pytest.mark.parametrize(
     ("usage", "expected"),
     [

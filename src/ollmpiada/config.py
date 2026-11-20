@@ -66,6 +66,7 @@ class ModelSpec(_Strict):
     reasoning_efforts: tuple[Effort, ...] = ()
     max_options: Annotated[int, Field(ge=2)] | None = None
     max_tokens: Annotated[int, Field(ge=1)] | None = None
+    reasoning_budget: Annotated[int, Field(ge=1)] | None = None
 
 
 class ModelsFile(_Strict):
@@ -91,6 +92,13 @@ class ModelsFile(_Strict):
                 raise ValueError(
                     f"model {m.id!r} is not a systemone model; it takes no max_options"
                 )
+            if apis[m.provider] != "openai-completions" and m.reasoning_budget is not None:
+                raise ValueError(
+                    f"model {m.id!r} is not an openai-completions model; "
+                    "it takes no reasoning_budget"
+                )
+            if m.reasoning_budget and m.max_tokens and m.reasoning_budget >= m.max_tokens:
+                raise ValueError(f"model {m.id!r}: reasoning_budget must be below max_tokens")
         return self
 
 
