@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from ollmpiada.games.base import Game, IllegalMove, Outcome, Side
 from ollmpiada.players.base import (
+    PermanentError,
     Player,
     TransportError,
     TurnAnswer,
@@ -190,10 +191,13 @@ async def play_game[S](
 
 
 async def _call(player: Player, request: TurnRequest, backoff_s: tuple[float, ...]) -> TurnResponse:
-    """Call the player, retrying transport failures after each backoff delay."""
+    """Call the player, retrying transport failures after each backoff delay; a
+    `PermanentError` is raised at once."""
     for delay in backoff_s:
         try:
             return await player.play(request)
+        except PermanentError:
+            raise
         except TransportError as e:
             log.warning("%s: %s; retrying in %.0f s", player.name, e, delay)
             await asyncio.sleep(delay)

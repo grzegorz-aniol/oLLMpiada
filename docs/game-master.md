@@ -21,7 +21,7 @@ interface, so the game master, players and UI never import chess directly:
 | `new_state()` | Starting position |
 | `side_to_move(state)` | Which `Side` (`first` / `second`; for chess White / Black) moves |
 | `legal_moves(state)` | Legal moves as `{id: label}`: a stable machine id (UCI `e2e4`) and a readable label (SAN `e4`) |
-| `move_groups(state)` | The legal moves grouped per piece as `{key: {id: label}}`, for decision players (see [answer formats](#answer-formats)); the base class returns one group `all`, chess one group per origin square keyed like `knight_g1` |
+| `move_groups(state)` | The legal moves grouped per piece as `{key: {id: label}}`, for decision players (see [answer formats](#answer-formats)); the base class returns no groups (`{}`), which a decision player treats as one group `all`; chess returns one group per origin square keyed like `knight_g1` |
 | `parse_move(state, text)` | Turns a model's move text into a legal move id, or raises with a reason |
 | `apply(state, move_id)` | Next state |
 | `outcome(state)` | `None` while the game runs, else winner or draw with a reason |
@@ -184,19 +184,22 @@ that move.
   Moves are never silently dropped.
 - **Rule:** when the N legal moves exceed `max_options` L, the one query asks the
   piece first. Its questions are `action`, `offer_draw`, `piece` and one
-  `move_<key>` per piece. `piece` ("Which piece do you move?") has one option per
-  group from the game's `move_groups`, keyed by the group key and described by
-  the group's move labels (`knight_g1`: `Nf3, Nh3`); `move_<key>` offers only that
-  group's moves. A group with more than L moves becomes groups `<key>_1`,
-  `<key>_2`, ... of near-equal size, the fewest that fit. A group with a single
-  move has no move question, since one option tells nothing: choosing it in
-  `piece` plays that move. The answer to the chosen group's move question is
-  played and the other move questions are ignored; an answer outside the chosen
-  group is a format error, and the retry asks the whole query again. N > L always
-  gives at least two groups, so `piece` never has fewer than two options; more
-  groups than L raise a transport error that stops the game, since `piece` cannot
-  be asked (in chess that needs L well below 26). Every such turn logs a warning
-  naming the model, N and the number of groups.
+  `move_<key>` per piece. `piece` ("Which piece do you move? Each option lists its
+  moves.") has one option per group from the game's `move_groups`, keyed by the
+  group key and described by the group's move labels (`knight_g1`: `Nf3, Nh3`);
+  `move_<key>` offers only that group's moves. A group with more than L moves
+  becomes groups `<key>_1`, `<key>_2`, ... of near-equal size, the fewest that
+  fit. A group with a single move has no move question, since one option tells
+  nothing: choosing it in `piece` plays that move. The answer to the chosen
+  group's move question is played and the other move questions are ignored; an
+  answer outside the chosen group is a format error, and the retry asks the whole
+  query again. N > L always gives at least two groups, so `piece` never has fewer
+  than two options; more groups than L stop the game at once, without retries
+  (see [validation](#validation-and-retries)), since `piece` cannot be asked (in
+  chess that needs L well below 26). Every such turn logs a warning naming the
+  model, N and the number of groups.
+- The `piece` wording is written for chess, the only game so far; another game
+  asked per group needs its own wording.
 
 ## Validation and retries
 
@@ -208,7 +211,9 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
 - **Rule:** transport failures (timeout, connection error, HTTP 5xx) are not the
   model's fault: retry twice with backoff, then abort the game and stop the
   competition with the error shown. Aborted games do not count as wins, losses or
-  draws.
+  draws. A failure that depends only on the position and the configuration (more
+  piece groups than `max_options`) is a `PermanentError`, a `TransportError` that
+  is never retried: it aborts at once with the same error.
 - Players raise `TransportError` for every failed call, HTTP 4xx included (bad
   request, authentication, a decision server refusing too many options): a retry
   rarely fixes those, but they are not the model's answer either, so they stop the

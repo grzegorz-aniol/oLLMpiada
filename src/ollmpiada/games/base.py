@@ -78,8 +78,9 @@ class Game[S](ABC):
 
     def move_groups(self, state: S) -> dict[str, dict[str, str]]:
         """The legal moves grouped as `{group key: {id: label}}`, one group per piece where
-        the game has pieces; keys are identifiers (letters, digits, `_`)."""
-        return {"all": self.legal_moves(state)}
+        the game has pieces; keys are identifiers (letters, digits, `_`). Empty when the
+        game does not group its moves: players then treat them as one group."""
+        return {}
 
     @abstractmethod
     def parse_move(self, state: S, text: str) -> str:

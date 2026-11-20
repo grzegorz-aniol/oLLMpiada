@@ -50,6 +50,11 @@ class TransportError(Exception):
     """The model could not be reached or failed to answer; not the model's fault."""
 
 
+class PermanentError(TransportError):
+    """A player failure that depends only on the request and the configuration, so a retry
+    cannot fix it."""
+
+
 class Player(Protocol):
     name: str
 

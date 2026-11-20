@@ -8,7 +8,14 @@ from collections.abc import Collection, Mapping
 import httpx
 
 from ollmpiada.config import Model, ModelSpec
-from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
+from ollmpiada.players.base import (
+    PermanentError,
+    TransportError,
+    TurnAnswer,
+    TurnRequest,
+    TurnResponse,
+    Usage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +87,7 @@ def _piece_groups(request: TurnRequest, spec: ModelSpec) -> dict[str, dict[str, 
     More legal moves than `max_options` always give at least two groups.
 
     Raises:
-        TransportError: More groups than `max_options`; the piece question cannot be asked.
+        PermanentError: More groups than `max_options`; the piece question cannot be asked.
     """
     limit = spec.max_options
     count = len(request.legal_moves)
@@ -96,7 +103,7 @@ def _piece_groups(request: TurnRequest, spec: ModelSpec) -> dict[str, dict[str, 
             split += 1
             groups.update({f"{key}_{i}": chunk for i, chunk in enumerate(chunks, 1)})
     if len(groups) > limit:
-        raise TransportError(
+        raise PermanentError(
             f"{len(groups)} pieces to choose from exceed max_options {limit} of {spec.id!r}"
         )
     log.warning(

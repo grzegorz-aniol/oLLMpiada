@@ -16,7 +16,7 @@ from pydantic_ai.usage import RequestUsage
 from ollmpiada.config import load_models
 from ollmpiada.games.base import Prompt
 from ollmpiada.players import PlayerError, create_player, resolve_player
-from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, Usage
+from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
 from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player
 from tests.fakes import ScriptedPlayer, unreadable
@@ -622,7 +622,7 @@ def test_decision_bad_piece_or_move_answers_are_format_errors(models, body, erro
 def test_decision_more_pieces_than_max_options_fails_loudly_without_a_query(models):
     sent = []
     player = decision_player(models, scripted({}, sent), max_options=2)
-    with pytest.raises(TransportError, match="pieces to choose from exceed max_options 2"):
+    with pytest.raises(PermanentError, match="pieces to choose from exceed max_options 2"):
         play(player, GROUPED)
     assert not sent
 
@@ -654,7 +654,7 @@ def test_decision_every_question_fits_max_options_and_every_move_is_offered_once
         player = decision_player(models, handler, max_options=max_options)
         options_needed = sum(math.ceil(size / max_options) for size in sizes)
         if len(legal) > max_options and options_needed > max_options:
-            with pytest.raises(TransportError):
+            with pytest.raises(PermanentError):
                 play(player, request)
             continue
         play(player, request)

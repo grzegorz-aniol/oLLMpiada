@@ -13,7 +13,7 @@ from ollmpiada.game_master import (
 )
 from ollmpiada.games.base import Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
-from ollmpiada.players.base import TransportError, TurnAnswer
+from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer
 from tests.fakes import USAGE, ScriptedPlayer, unreadable
 
 RESIGN = TurnAnswer(action="resign")
@@ -186,6 +186,15 @@ def test_third_transport_failure_aborts_the_game():
     assert result.error == "black-model: connection refused"
     assert len(result.turns) == 3 and len(black.requests) == 4
     assert isinstance(events[-1], GameFinished) and events[-1].result is result
+
+
+def test_permanent_error_aborts_the_game_at_once_without_retries(caplog):
+    error = PermanentError("30 pieces to choose from exceed max_options 26 of 'basal'")
+    result, _, black = run(["e4"], [error])
+    assert result.outcome is None
+    assert result.error == f"black-model: {error}"
+    assert len(black.requests) == 1
+    assert "retrying" not in caplog.text
 
 
 # --- events and records ---
