@@ -12,9 +12,12 @@ the app reads.
 ## Model config
 
 `config/models.json` lists the providers and the models available for
-competitions. It is committed: it holds no secrets, only the names of environment
-variables that carry tokens. The path can be changed with `OLLMPIADA_MODELS_CONFIG`.
-The committed file holds this example:
+competitions. The app looks for it relative to the working directory; the path can
+be changed with `OLLMPIADA_MODELS_CONFIG`.
+
+- **Decision:** the file is local and gitignored, because providers and models
+  differ per machine. It holds no secrets, only the names of environment variables
+  that carry tokens. Start from this example:
 
 ```json
 {
