@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 log = logging.getLogger(__name__)
 
 Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+Api = Literal["openai-completions", "anthropic-messages", "systemone"]
 
 
 class ConfigError(Exception):
@@ -53,6 +54,7 @@ class _Strict(BaseModel):
 class Provider(_Strict):
     name: str
     url: str
+    api: Api
     token_env: str | None = None
 
 
@@ -60,7 +62,6 @@ class ModelSpec(_Strict):
     id: str
     provider: str
     model: str
-    type: Literal["llm", "decision"]
     reasoning_efforts: tuple[Effort, ...] = ()
 
 
@@ -75,9 +76,12 @@ class ModelsFile(_Strict):
             raise ValueError(f"duplicate provider name {duplicate!r}")
         if duplicate := _first_duplicate([m.id for m in self.models]):
             raise ValueError(f"duplicate model id {duplicate!r}")
+        apis = {p.name: p.api for p in self.providers}
         for m in self.models:
             if m.provider not in names:
                 raise ValueError(f"model {m.id!r} refers to unknown provider {m.provider!r}")
+            if apis[m.provider] == "systemone" and m.reasoning_efforts:
+                raise ValueError(f"model {m.id!r} is a systemone model; it takes no efforts")
         return self
 
 

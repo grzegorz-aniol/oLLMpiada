@@ -6,27 +6,39 @@ import pytest
 
 MODELS = {
     "providers": [
-        {"name": "local", "url": "http://local/v1"},
-        {"name": "hosted", "url": "https://hosted/v1", "token_env": "TEST_HOSTED_KEY"},
-        {"name": "basal", "url": "http://basal/v1/systemone"},
+        {"name": "local", "url": "http://local/v1", "api": "openai-completions"},
+        {
+            "name": "hosted",
+            "url": "https://hosted/v1",
+            "api": "openai-completions",
+            "token_env": "TEST_HOSTED_KEY",
+        },
+        {"name": "claude-proxy", "url": "http://proxy/anthropic", "api": "anthropic-messages"},
+        {"name": "basal", "url": "http://basal/v1/systemone", "api": "systemone"},
     ],
     "models": [
         {
             "id": "local-llm",
             "provider": "local",
             "model": "qwen",
-            "type": "llm",
             "reasoning_efforts": ["low", "high"],
         },
-        {"id": "hosted-llm", "provider": "hosted", "model": "gpt", "type": "llm"},
-        {"id": "basal-mini", "provider": "basal", "model": "basal", "type": "decision"},
+        {"id": "hosted-llm", "provider": "hosted", "model": "gpt"},
+        {
+            "id": "claude",
+            "provider": "claude-proxy",
+            "model": "anthropic/claude-haiku-5-5",
+            "reasoning_efforts": ["none", "low"],
+        },
+        {"id": "basal-mini", "provider": "basal", "model": "basal"},
     ],
 }
 
 
 @pytest.fixture
 def models_data() -> dict:
-    """A fresh copy of a valid model config: two LLM providers (one with a token) and SystemOne."""
+    """A fresh copy of a valid model config: OpenAI (with and without a token), Anthropic
+    and SystemOne providers."""
     return copy.deepcopy(MODELS)
 
 

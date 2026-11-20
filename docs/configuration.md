@@ -22,18 +22,22 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 ```json
 {
   "providers": [
-    {"name": "local-llama", "url": "http://127.0.0.1:1234/v1"},
+    {"name": "local-llama", "url": "http://127.0.0.1:1234/v1",
+     "api": "openai-completions"},
     {"name": "openrouter", "url": "https://openrouter.ai/api/v1",
-     "token_env": "OPENROUTER_API_KEY"},
-    {"name": "basal", "url": "http://127.0.0.1:8000/v1/systemone"}
+     "api": "openai-completions", "token_env": "OPENROUTER_API_KEY"},
+    {"name": "anthropic", "url": "https://api.anthropic.com",
+     "api": "anthropic-messages", "token_env": "ANTHROPIC_API_KEY"},
+    {"name": "basal", "url": "http://127.0.0.1:8000/v1/systemone", "api": "systemone"}
   ],
   "models": [
     {"id": "qwen3-30b-local", "provider": "local-llama", "model": "qwen3-30b-a3b",
-     "type": "llm", "reasoning_efforts": ["none", "low", "medium", "high"]},
+     "reasoning_efforts": ["none", "low", "medium", "high"]},
     {"id": "gpt-oss-120b", "provider": "openrouter", "model": "openai/gpt-oss-120b",
-     "type": "llm", "reasoning_efforts": ["low", "medium", "high"]},
-    {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF",
-     "type": "decision", "reasoning_efforts": []}
+     "reasoning_efforts": ["low", "medium", "high"]},
+    {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
+     "reasoning_efforts": ["none", "low", "medium", "high"]},
+    {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF"}
   ]
 }
 ```
@@ -43,8 +47,20 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `name` | yes | Unique name that models refer to |
-| `url` | yes | Base URL. For `llm` models: an OpenAI-compatible API root (ending in `/v1`). For `decision` models: the full SystemOne endpoint URL |
+| `url` | yes | Base URL; what it points at depends on `api` (below) |
+| `api` | yes | The API the provider speaks, which picks the player adapter (below) |
 | `token_env` | no | Name of the environment variable holding the bearer token |
+
+| `api` | Player | `url` |
+| --- | --- | --- |
+| `openai-completions` | LLM, PydanticAI `OpenAIChatModel` (chat completions) | API root ending in `/v1`; requests go to `<url>/chat/completions` |
+| `anthropic-messages` | LLM, PydanticAI `AnthropicModel` (Messages API) | API root without `/v1`; requests go to `<url>/v1/messages` |
+| `systemone` | Decision model (SystemOne API, see [answer formats](game-master.md#answer-formats)) | The full endpoint URL |
+
+- **Decision:** the provider's `api` picks the player adapter; models carry no
+  type of their own. The names follow Pi's provider `api` values; a further API
+  (for example OpenAI Responses or Gemini) is one more value and one more branch
+  in `players/llm.py`.
 
 - **Rule:** the config never contains a token value, only `token_env`. Without
   `token_env`, or when the variable is empty, requests carry no `Authorization`
@@ -60,7 +76,6 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `id` | yes | Unique name used on the command line and in statistics |
 | `provider` | yes | A provider `name` |
 | `model` | yes | Model name sent to the provider |
-| `type` | yes | `llm` (chat completion with structured output) or `decision` (SystemOne API) |
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
@@ -69,16 +84,22 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   applies; an effort is rejected for a model that lists none. Statistics are kept
   per model *and* effort, so `qwen3-30b-local@high` and `qwen3-30b-local@low` are
   separate players.
-- Effort values follow the OpenAI `reasoning_effort` names that PydanticAI passes
-  through (`openai_reasoning_effort`): `none`, `minimal`, `low`, `medium`, `high`,
-  `xhigh`, `max`. A model lists only the ones its server accepts.
-- **Decision:** every `llm` provider is reached through an OpenAI-compatible chat
-  completions API (PydanticAI `OpenAIChatModel` with `OpenAIProvider(base_url=...,
-  api_key=...)`). Native Anthropic or Gemini APIs are reached through a proxy or
-  added later as a provider field.
+- Effort values follow the OpenAI `reasoning_effort` names: `none`, `minimal`,
+  `low`, `medium`, `high`, `xhigh`, `max`. A model lists only the ones its server
+  accepts. For `openai-completions` the effort is sent as is
+  (`openai_reasoning_effort`); for `anthropic-messages` it goes through
+  PydanticAI's unified `thinking` setting: `none` turns thinking off, other levels
+  are mapped per Claude model (adaptive thinking with that effort on current
+  models, a token budget on older ones). `systemone` models take no effort, and
+  the loader rejects one that lists any.
+- **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
+  know how to send thinking, so a proxy route prefix is stripped for that lookup
+  (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
+  on, Claude cannot be forced to call the output tool, so PydanticAI asks for
+  JSON-schema output instead; a bare id with no effort thinks by default.
 
 The loader validates the file with Pydantic at startup: unique ids, existing
-provider names, known `type` and effort values. An invalid file stops the app
+provider names, known `api` and effort values. An invalid file stops the app
 with a message naming the bad entry.
 
 ## Environment

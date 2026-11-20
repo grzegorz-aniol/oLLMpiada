@@ -108,7 +108,8 @@ All answers carry the same three things: an action (`move`, `resign`,
 `accept_draw`), a move when the action is `move`, and an optional draw offer made
 together with the move.
 
-**LLM players** use a PydanticAI `Agent` whose `output_type` is the answer model:
+**LLM players** (`openai-completions` and `anthropic-messages` providers) use a
+PydanticAI `Agent` whose `output_type` is the answer model:
 
 ```python
 class TurnAnswer(BaseModel):
@@ -117,12 +118,15 @@ class TurnAnswer(BaseModel):
     offer_draw: bool = False
 ```
 
-The chosen reasoning effort goes in as `OpenAIChatModelSettings(openai_reasoning_effort=...)`.
-The adapter appends a short ANSWER FORMAT section naming the three fields, sets
-`request_timeout` from `OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the OpenAI
-client's own retries, so the game master owns every retry. Without a token the
-`Authorization` header is omitted per request (`extra_headers` with `openai.Omit`),
-because the OpenAI client otherwise always sends one.
+The chosen reasoning effort is mapped per API, as described in
+[model fields](configuration.md#model-fields). The adapter appends a short ANSWER
+FORMAT section naming the three fields, sets `request_timeout` from
+`OLLMPIADA_REQUEST_TIMEOUT_S` and turns off the provider client's own retries, so
+the game master owns every retry. Without a token the `Authorization` header is
+omitted per request (`extra_headers` with the SDK's `Omit`), because both the
+OpenAI and the Anthropic clients otherwise always send the key as a bearer token.
+Reasoning tokens are known when the model reports them (OpenAI
+`completion_tokens_details`, Anthropic thinking tokens) and unknown otherwise.
 
 - **Sensitive:** PydanticAI retries invalid structured output on its own. Set its
   output retries to zero and let the game master retry, so every rejection is

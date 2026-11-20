@@ -1,16 +1,21 @@
-"""LLM player: an OpenAI-compatible chat model with structured output through PydanticAI."""
+"""LLM player: OpenAI chat completions or Anthropic messages, with structured output through
+PydanticAI."""
 
 import time
 
+import anthropic
 import httpx2
+import openai
 import pydantic_ai
-from openai import Omit
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model as AIModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
 from ollmpiada.config import Effort, Model
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
@@ -30,11 +35,10 @@ exactly as listed under LEGAL MOVES, required when action is move); offer_draw
 
 class LLMPlayer:
     def __init__(
-        self, name: str, model: AIModel, *, effort: Effort | None, timeout_s: float
+        self, name: str, model: AIModel, *, timeout_s: float, settings: ModelSettings | None = None
     ) -> None:
-        settings = OpenAIChatModelSettings(request_timeout=timeout_s, max_retries=0)
-        if effort:
-            settings["openai_reasoning_effort"] = effort
+        # The game master owns every retry, so the provider client makes one attempt.
+        settings = ModelSettings(request_timeout=timeout_s, max_retries=0) | (settings or {})
         self.name = name
         # Output retries are off so every invalid answer reaches the game master to be counted.
         self._agent = Agent(
@@ -70,14 +74,30 @@ def create_llm_player(
     timeout_s: float,
     http_client: httpx2.AsyncClient | None = None,
 ) -> LLMPlayer:
-    provider = OpenAIProvider(
-        base_url=model.provider.url, api_key=model.token or "unused", http_client=http_client
-    )
-    # Without a token no Authorization header is sent: a proxy may handle security itself.
-    no_auth = OpenAIChatModelSettings(extra_headers={"Authorization": Omit()})
-    settings = None if model.token else no_auth
-    chat_model = OpenAIChatModel(model.spec.model, provider=provider, settings=settings)
-    return LLMPlayer(name, chat_model, effort=effort, timeout_s=timeout_s)
+    """Build the player for an `openai-completions` or `anthropic-messages` provider."""
+    url, token = model.provider.url, model.token
+    key = token or "unused"  # the clients refuse an empty key; the header is omitted below
+    settings = ModelSettings()
+    if model.provider.api == "anthropic-messages":
+        provider = AnthropicProvider(base_url=url, api_key=key, http_client=http_client)
+        # A proxy route prefix (`anthropic/claude-...`) would hide the Claude profile,
+        # which decides how thinking and effort are sent.
+        profile = provider.model_profile(model.spec.model.rpartition("/")[2])
+        ai_model = AnthropicModel(model.spec.model, provider=provider, profile=profile)
+        if effort:
+            settings["thinking"] = False if effort == "none" else effort
+        omit = anthropic.Omit()
+    else:
+        provider = OpenAIProvider(base_url=url, api_key=key, http_client=http_client)
+        ai_model = OpenAIChatModel(model.spec.model, provider=provider)
+        if effort:
+            settings["openai_reasoning_effort"] = effort
+        omit = openai.Omit()
+    if not token:
+        # Without a token no Authorization header is sent (both SDKs send the key as a
+        # bearer token): a proxy may handle security itself.
+        settings["extra_headers"] = {"Authorization": omit}
+    return LLMPlayer(name, ai_model, timeout_s=timeout_s, settings=settings)
 
 
 def _describe(error: UnexpectedModelBehavior) -> str:

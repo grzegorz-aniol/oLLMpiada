@@ -20,15 +20,16 @@ def models_rows(out: str) -> dict[str, list[str]]:
     return rows
 
 
-def test_models_lists_type_efforts_and_availability(models_file, monkeypatch, capsys):
+def test_models_lists_api_efforts_and_availability(models_file, monkeypatch, capsys):
     monkeypatch.delenv("TEST_HOSTED_KEY")
     assert main(["models"]) == 0
     rows = models_rows(capsys.readouterr().out)
-    assert rows["local-llm"][1] == "llm"
+    assert rows["local-llm"][1] == "openai-completions"
+    assert rows["claude"][1] == "anthropic-messages"
     assert rows["local-llm"][3] == "low, high"
     assert rows["local-llm"][4] == "yes"
     assert rows["hosted-llm"][4] == "no"
-    assert rows["basal-mini"][1:4] == ["decision", "basal", "-"]
+    assert rows["basal-mini"][1:4] == ["systemone", "basal", "-"]
 
 
 def test_invalid_config_exits_with_message_naming_the_entry(models_file, capsys):
@@ -47,9 +48,7 @@ def test_unknown_command_exits_with_usage():
 def test_entry_point_loads_dotenv_but_shell_values_win(
     models_file, models_data, tmp_path, monkeypatch, capsys
 ):
-    models_data["models"].append(
-        {"id": "from-dotenv", "provider": "local", "model": "m", "type": "llm"}
-    )
+    models_data["models"].append({"id": "from-dotenv", "provider": "local", "model": "m"})
     dotenv_config = tmp_path / "dotenv-models.json"
     dotenv_config.write_text(json.dumps(models_data))
     (tmp_path / ".env").write_text(

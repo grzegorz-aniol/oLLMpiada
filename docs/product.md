@@ -61,7 +61,7 @@ The rules of refereeing, prompting and scoring are owned by
 ## Stack
 
 - **Python 3.14 with uv** - one language for the referee, the model calls and the UI.
-- **PydanticAI** (`pydantic-ai-slim[openai]`) - LLM calls with structured output,
+- **PydanticAI** (`pydantic-ai-slim[anthropic,openai]`) - LLM calls with structured output,
   usage counting and per-call reasoning effort; already used in the author's other
   projects, and leaves room for agent-style players with tools later.
 - **httpx** - calls to decision models, which speak the SystemOne API rather than

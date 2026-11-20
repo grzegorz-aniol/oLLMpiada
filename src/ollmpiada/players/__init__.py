@@ -1,4 +1,4 @@
-"""Players by model type, named `<id>[@effort]` on the command line."""
+"""Players by provider API, named `<id>[@effort]` on the command line."""
 
 from typing import cast
 
@@ -41,6 +41,6 @@ def create_player(name: str, models: dict[str, Model], *, timeout_s: float) -> P
         PlayerError: See `resolve_player`.
     """
     model, effort = resolve_player(name, models)
-    if model.spec.type == "decision":
+    if model.provider.api == "systemone":
         return DecisionPlayer(name, model, timeout_s=timeout_s)
     return create_llm_player(name, model, effort=effort, timeout_s=timeout_s)

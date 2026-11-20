@@ -39,7 +39,7 @@ def test_invalid_timeout_is_rejected(value):
 
 def test_loads_models_with_providers_and_tokens(tmp_path, models_data):
     models = load_models(write(tmp_path, models_data), {"TEST_HOSTED_KEY": "secret"})
-    assert list(models) == ["local-llm", "hosted-llm", "basal-mini"]
+    assert list(models) == ["local-llm", "hosted-llm", "claude", "basal-mini"]
     local = models["local-llm"]
     assert local.provider.url == "http://local/v1"
     assert local.spec.reasoning_efforts == ("low", "high")
@@ -68,7 +68,10 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         (lambda d: d["models"].append(dict(d["models"][0])), "duplicate model id"),
         (lambda d: d["providers"].append(dict(d["providers"][0])), "duplicate provider name"),
         (lambda d: d["models"][0].update(provider="nope"), "unknown provider 'nope'"),
-        (lambda d: d["models"][0].update(type="engine"), "should be .llm. or .decision."),
+        (lambda d: d["providers"][0].update(api="gemini"), r"providers\.0\.api\s+Input should"),
+        (lambda d: d["providers"][0].pop("api"), r"providers\.0\.api\s+Field required"),
+        (lambda d: d["models"][0].update(type="llm"), r"models\.0\.type\s+Extra inputs"),
+        (lambda d: d["models"][3].update(reasoning_efforts=["low"]), "systemone model"),
         (lambda d: d["models"][0].update(reasoning_efforts=["huge"]), r"efforts\.0\s+Input should"),
         (lambda d: d["models"][0].pop("model"), r"models\.0\.model\s+Field required"),
         (lambda d: d["providers"][0].update(token="leak"), r"providers\.0\.token\s+Extra inputs"),
@@ -77,7 +80,10 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "duplicate-id",
         "duplicate-provider",
         "unknown-provider",
-        "bad-type",
+        "bad-api",
+        "missing-api",
+        "type-dropped",
+        "systemone-with-efforts",
         "bad-effort",
         "missing-field",
         "unknown-field",

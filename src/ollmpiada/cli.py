@@ -76,12 +76,16 @@ def _positive(text: str) -> int:
 
 def _models_table(models: dict[str, Model]) -> Table:
     table = Table(
-        Column("Model", no_wrap=True), "Type", "Provider", "Reasoning efforts", "Available"
+        Column("Model", no_wrap=True),
+        Column("API", no_wrap=True),
+        "Provider",
+        "Reasoning efforts",
+        "Available",
     )
     for m in models.values():
         table.add_row(
             m.id,
-            m.spec.type,
+            m.provider.api,
             m.provider.name,
             ", ".join(m.spec.reasoning_efforts) or "-",
             "yes" if m.available else "[red]no[/red]",

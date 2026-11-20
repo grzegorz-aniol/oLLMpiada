@@ -20,8 +20,9 @@ Owner of: components, data flow and the code map.
                                 ┌───────────┴───────────┐
                                 ▼                       ▼
                            LLM player             decision player
-                      (PydanticAI, OpenAI-       (httpx, SystemOne
-                       compatible endpoint)          endpoint)
+                      (PydanticAI; OpenAI        (httpx, SystemOne
+                      completions or Anthropic       endpoint)
+                       Messages endpoint)
 ```
 
 The CLI validates the arguments, starts one competition runner in an asyncio
@@ -50,7 +51,7 @@ interface and the registry; what adding a game may touch is ruled in
 
 ### Players
 
-One adapter per model `type`. A player receives the shared prompt and the turn's
+One adapter per provider `api` (see [provider fields](configuration.md#provider-fields)). A player receives the shared prompt and the turn's
 legal moves, adds its own answer format, calls the model and returns the raw
 answer with elapsed time and token usage. **Rule:** players never validate moves
 or touch game state; that is the game master's job.
@@ -100,7 +101,7 @@ argparse subcommands; Rich renders everything the user sees.
 
 | Command | What it does |
 | --- | --- |
-| `ollmpiada models` | Lists configured models with type, reasoning efforts and availability |
+| `ollmpiada models` | Lists configured models with API, reasoning efforts and availability |
 | `ollmpiada probe <model>[@effort]` | Sends one opening-position turn and prints the parsed answer, time and tokens |
 | `ollmpiada run <a>[@effort] <b>[@effort]` | Plays a competition; flags `--game` (default `chess`), `--games`, `--max-turns`, `--mode visual\|background` |
 | `ollmpiada show <run-dir>` | Prints the results and statistics of a saved competition |

@@ -29,9 +29,10 @@ uv run pytest tests/test_x.py -k name   # one test
   The fake is `ScriptedPlayer` in `tests/fakes.py`; `tests/conftest.py` holds the
   shared model config fixtures (`models_data`, `models_file`).
 - Player adapters are tested against recorded HTTP exchanges or PydanticAI's
-  `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI client takes an
-  `httpx2` client (`httpx2.MockTransport`); the decision player uses `httpx`
-  (`httpx.MockTransport`).
+  `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI and Anthropic
+  clients take an `httpx2` client (`httpx2.MockTransport`); the decision player
+  uses `httpx` (`httpx.MockTransport`). Current Claude models are always streamed,
+  so an Anthropic mock answers with server-sent events.
 - Terminal views are tested by rendering into a recording Rich `Console`
   (`Console(record=True)`) and checking the exported text; CLI commands are
   tested by calling the entry point with arguments and checking output and exit

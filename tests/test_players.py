@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 
 import httpx
@@ -55,8 +56,9 @@ def test_resolve_rejects_unavailable_model(models_file):
         resolve_player("hosted-llm", models)
 
 
-def test_create_player_picks_adapter_by_type(models):
+def test_create_player_picks_adapter_by_provider_api(models):
     assert isinstance(create_player("local-llm@low", models, timeout_s=5), LLMPlayer)
+    assert isinstance(create_player("claude@none", models, timeout_s=5), LLMPlayer)
     decision = create_player("basal-mini", models, timeout_s=5)
     assert isinstance(decision, DecisionPlayer) and decision.name == "basal-mini"
 
@@ -64,14 +66,14 @@ def test_create_player_picks_adapter_by_type(models):
 # --- LLM player ---
 
 
-def function_player(reply, effort=None) -> tuple[LLMPlayer, list[AgentInfo]]:
+def function_player(reply, settings=None) -> tuple[LLMPlayer, list[AgentInfo]]:
     seen: list[AgentInfo] = []
 
     def respond(messages, info: AgentInfo) -> ModelResponse:
         seen.append(info)
         return reply(messages, info)
 
-    return LLMPlayer("p", FunctionModel(respond), effort=effort, timeout_s=7), seen
+    return LLMPlayer("p", FunctionModel(respond), timeout_s=7, settings=settings), seen
 
 
 def tool_reply(args: dict, usage=RequestUsage()):
@@ -83,7 +85,8 @@ def tool_reply(args: dict, usage=RequestUsage()):
 def test_llm_answer_with_usage_and_settings():
     usage = RequestUsage(input_tokens=50, output_tokens=20, output_reasoning_tokens=12)
     player, seen = function_player(
-        tool_reply({"action": "move", "move": "Nf3", "offer_draw": True}, usage), effort="high"
+        tool_reply({"action": "move", "move": "Nf3", "offer_draw": True}, usage),
+        settings={"openai_reasoning_effort": "high"},
     )
     response = play(player)
     assert response.answer == TurnAnswer(action="move", move="Nf3", offer_draw=True)
@@ -102,7 +105,7 @@ def test_llm_prompt_is_shared_prompt_plus_answer_format():
         prompts.append(messages[-1].parts[-1].content)
         return tool_reply({"action": "resign"})(messages, info)
 
-    player = LLMPlayer("p", FunctionModel(capture), effort=None, timeout_s=7)
+    player = LLMPlayer("p", FunctionModel(capture), timeout_s=7)
     play(player)
     assert prompts[0].startswith("PROMPT\n") and "ANSWER FORMAT" in prompts[0]
 
@@ -242,13 +245,105 @@ def test_llm_http_server_error_is_a_transport_error_without_client_retries(model
     assert len(sent) == 1
 
 
+ANTHROPIC_MESSAGE = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "anthropic/claude-haiku-5-5",
+    "content": [
+        {"type": "tool_use", "id": "t1", "name": "final_result", "input": {"action": "resign"}}
+    ],
+    "stop_reason": "tool_use",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 300, "output_tokens": 40},
+}
+
+
+def anthropic_reply(request: httpx2.Request) -> httpx2.Response:
+    """Answer like the Messages API, as server-sent events: JSON text for native output,
+    else the output tool. PydanticAI streams because a Claude model's default
+    `max_tokens` is its maximum output, which the SDK refuses to wait for unstreamed."""
+    body = json.loads(request.content)
+    answer = '{"action": "resign"}'
+    if "format" in body.get("output_config", {}):
+        block, delta = {"type": "text", "text": ""}, {"type": "text_delta", "text": answer}
+    else:
+        block = {"type": "tool_use", "id": "t1", "name": "final_result", "input": {}}
+        delta = {"type": "input_json_delta", "partial_json": answer}
+    assert body["stream"], "current Claude models are always streamed"
+    start = {**ANTHROPIC_MESSAGE, "content": [], "stop_reason": None}
+    start["usage"] = {"input_tokens": 300, "output_tokens": 0}
+    events = [
+        ("message_start", {"message": start}),
+        ("content_block_start", {"index": 0, "content_block": block}),
+        ("content_block_delta", {"index": 0, "delta": delta}),
+        ("content_block_stop", {"index": 0}),
+        ("message_delta", {"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 40}}),
+        ("message_stop", {}),
+    ]
+    sse = "".join(
+        f"event: {name}\ndata: {json.dumps({'type': name, **data})}\n\n" for name, data in events
+    )
+    return httpx2.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.parametrize(
+    ("effort", "token", "thinking", "output_effort", "authorization"),
+    [
+        (None, None, None, None, None),
+        ("none", "tok", {"type": "disabled"}, None, "Bearer tok"),
+        ("low", None, {"type": "adaptive"}, "low", None),
+    ],
+    ids=["model-default", "thinking-off", "adaptive-low"],
+)
+def test_llm_over_anthropic_messages_http(
+    models, effort, token, thinking, output_effort, authorization
+):
+    """The fixture's model name carries a proxy prefix (`anthropic/claude-haiku-5-5`)."""
+    sent: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return anthropic_reply(request)
+
+    model = models["claude"]
+    model = dataclasses.replace(model, token=token)
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    player = create_llm_player("c", model, effort=effort, timeout_s=5, http_client=client)
+    response = play(player)
+
+    assert response.answer == TurnAnswer(action="resign")
+    assert response.usage == Usage(300, 40, None)
+    request = sent[0]
+    assert str(request.url) == "http://proxy/anthropic/v1/messages"
+    assert request.headers.get("authorization") == authorization
+    body = json.loads(request.content)
+    assert body["model"] == "anthropic/claude-haiku-5-5"
+    assert body.get("thinking") == thinking
+    assert body.get("output_config", {}).get("effort") == output_effort
+
+
+def test_llm_anthropic_http_error_is_a_transport_error(models):
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx2.Response(529, json={"type": "error", "error": {"type": "overloaded_error"}})
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    player = create_llm_player("c", models["claude"], effort=None, timeout_s=5, http_client=client)
+    with pytest.raises(TransportError):
+        play(player)
+    assert len(sent) == 1
+
+
 # --- decision player ---
 
 
 def decision_player(models, handler, model_id="basal-mini", token=None):
     model = models[model_id]
     if token:
-        model = type(model)(model.spec, model.provider, token, True)
+        model = dataclasses.replace(model, token=token)
     return DecisionPlayer("d", model, timeout_s=5, transport=httpx.MockTransport(handler))
 
 

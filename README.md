@@ -29,8 +29,9 @@ and every competition is saved to `runs/`.
 Each game is a separate module behind one interface, so games other than chess
 can be added without touching the referee or the terminal UI.
 
-Players are LLMs behind an OpenAI-compatible API (through PydanticAI) or decision
-models behind the SystemOne API. This is an experiment, not a production app.
+Players are LLMs behind an OpenAI chat-completions or Anthropic Messages API
+(through PydanticAI) or decision models behind the SystemOne API. This is an
+experiment, not a production app.
 
 ## Quick start
 
