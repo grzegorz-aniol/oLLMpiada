@@ -12,18 +12,23 @@ from ollmpiada.competition import (
     load_state,
     prompt_version,
 )
-from ollmpiada.game_master import GameStarted, MoveMade
+from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade
 from ollmpiada.games.base import Prompt
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
-from tests.fakes import Judged, ScriptedPlayer
+from tests.fakes import WARM_UP, Judged, ScriptedPlayer
 
 RESIGN = TurnAnswer(action="resign")
 
 
-def compete(a_script, b_script, tmp_path, *, games=2, on_event=None, game=None, max_turns=20):
-    a = ScriptedPlayer("model-a@high", a_script)
-    b = ScriptedPlayer("model-b", b_script)
+def compete(a_script, b_script, tmp_path, **kwargs):
+    """Run a competition of scripted players, each answering the warm-up call first."""
+    a = ScriptedPlayer("model-a@high", [WARM_UP, *a_script])
+    b = ScriptedPlayer("model-b", [WARM_UP, *b_script])
+    return run((a, b), tmp_path, **kwargs)
+
+
+def run(players, tmp_path, *, games=2, on_event=None, game=None, max_turns=20):
     events = []
     competition = None
 
@@ -34,7 +39,7 @@ def compete(a_script, b_script, tmp_path, *, games=2, on_event=None, game=None, 
 
     competition = Competition(
         game or ChessGame(),
-        (a, b),
+        players,
         games=games,
         max_turns=max_turns,
         runs_dir=tmp_path / ".local" / "runs",
@@ -178,6 +183,80 @@ def test_transport_failure_aborts_the_competition(tmp_path):
     assert isinstance(events[-1], CompetitionFinished)
 
 
+def test_each_player_is_warmed_up_once_before_the_first_game(tmp_path):
+    a = ScriptedPlayer("model-a", [WARM_UP, RESIGN, RESIGN])
+    b = ScriptedPlayer("model-b", [WARM_UP, "e4"])
+    seen = []
+
+    def record(competition, event):
+        status = competition.state.status
+        seen.append((type(event).__name__, status, len(a.requests), len(b.requests)))
+
+    state, _, _ = run((a, b), tmp_path, on_event=record)
+    assert state.status == "finished"
+    assert seen[:3] == [
+        ("CompetitionProgress", "warming up", 0, 0),
+        ("CompetitionProgress", "running", 1, 1),
+        ("GameStarted", "running", 1, 1),
+    ]
+    assert (len(a.requests), len(b.requests)) == (3, 2)
+    warm_up = a.requests[0]
+    assert len(warm_up.legal_moves) == 20 and "move 1 of 20" in warm_up.prompt.user
+
+
+def test_warm_up_retries_a_transport_failure_and_the_competition_proceeds(tmp_path):
+    a = ScriptedPlayer("model-a", [TransportError("loading model"), WARM_UP, RESIGN])
+    b = ScriptedPlayer("model-b", [WARM_UP])
+    state, _, _ = run((a, b), tmp_path, games=1)
+    assert state.status == "finished" and state.error is None
+    assert state.results[0].reason == "resignation"
+
+
+def test_a_failed_warm_up_stops_the_competition_before_any_game(tmp_path):
+    error = TransportError("connection refused")
+    a = ScriptedPlayer("model-a", [WARM_UP, RESIGN])
+    b = ScriptedPlayer("model-b", [error, error, error])
+    state, competition, events = run((a, b), tmp_path)
+    assert state.status == "aborted"
+    assert state.error == "warm-up call to model-b failed: connection refused"
+    assert state.results == [] and state.stats["model-b"].games == 0
+    assert not any(isinstance(e, GameStarted) for e in events)
+    assert isinstance(events[-1], CompetitionFinished)
+    assert read_json(competition.run_dir / "competition.json")["status"] == "aborted"
+    # The second player warms up first, so the first one is never called.
+    assert (len(a.requests), len(b.requests)) == (0, 3)
+
+
+def test_warm_up_is_not_counted_in_statistics_or_events(tmp_path):
+    slow = TurnResponse('{"action":"move","move":"e4"}', None, 60.0, Usage(5000, 900, 800))
+    a = ScriptedPlayer("model-a", [slow, RESIGN])
+    b = ScriptedPlayer("model-b", [slow])
+    state, _, events = run((a, b), tmp_path, games=1)
+    stats_a, stats_b = state.stats["model-a"], state.stats["model-b"]
+    assert (stats_a.calls, stats_a.thinking_s, stats_a.input_tokens) == (1, 1.0, 100)
+    assert (stats_a.output_tokens, stats_a.illegal_attempts) == (10, 0)
+    assert (stats_b.calls, stats_b.thinking_s, stats_b.input_tokens) == (0, 0.0, 0)
+    assert sum(isinstance(e, AnswerReceived) for e in events) == 1
+
+
+def test_stop_during_warm_up_plays_no_game(tmp_path):
+    competition = None
+
+    class StopsWhenCalled(ScriptedPlayer):
+        async def play(self, request):
+            competition.stop()
+            return await super().play(request)
+
+    def keep(c, event):
+        nonlocal competition
+        competition = c
+
+    players = (ScriptedPlayer("model-a", []), StopsWhenCalled("model-b", [WARM_UP]))
+    state, _, events = run(players, tmp_path, on_event=keep)
+    assert state.status == "stopped" and state.results == []
+    assert not any(isinstance(e, GameStarted) for e in events)
+
+
 def test_stop_aborts_the_game_in_progress_and_keeps_finished_games(tmp_path):
     def stop_in_game_two(competition, event):
         if isinstance(event, MoveMade) and event.number == 2:
@@ -207,7 +286,7 @@ def test_stop_between_games_plays_no_more(tmp_path):
 def test_progress_events_carry_the_state(tmp_path):
     _, _, events = compete(["f3", "g4", RESIGN], ["e5", "Qh4#", "e4"], tmp_path)
     progress = [e for e in events if isinstance(e, CompetitionProgress)]
-    assert [len(e.state.results) for e in progress] == [2, 2, 2]  # same live object
+    assert [len(e.state.results) for e in progress] == [2, 2, 2, 2]  # same live object
     assert isinstance(events[0], CompetitionProgress)
     assert isinstance(events[-1], CompetitionFinished)
     assert sum(isinstance(e, MoveMade) for e in events) == 5

@@ -75,14 +75,27 @@ request (the CLI sends one on Ctrl+C).
 - **Rule:** the runner knows nothing about the terminal. It only publishes events,
   so a later front end (a web UI, for example) subscribes to the same events
   without changes to the runner.
+- **Rule:** before the first game the runner warms up each player with one real
+  call: the opening turn of a new game through the player's own adapter, so a
+  server that loads models on demand (llama.cpp, a proxy) has the model ready and
+  the first move is not spent on a cold start. The call is retried like a turn
+  request after a transport failure (see
+  [validation](game-master/turns.md#validation-and-retries)); its answer is
+  discarded, so a format error still counts as warm, and it adds nothing to
+  statistics, results or game events. The second player warms up first, so a server
+  that holds one model at a time keeps the one that moves first in game 1. When a
+  warm-up still fails, no game is played: the competition ends `aborted` with the
+  error `warm-up call to <player> failed: <last error>`.
 
-`Competition` in `competition.py` plays the games in order, each as an asyncio
-task, so `stop()` (Ctrl+C) cancels the game in progress, which is discarded: not
-listed, not saved, not counted. It publishes the game
-master's events plus `CompetitionProgress` (at the start and after every counted
-game) and `CompetitionFinished`; both carry the live `CompetitionState` (results,
-per-player `PlayerStats`, status `running`, `finished`, `aborted` or `stopped`).
-An aborted game ends the competition.
+`Competition` in `competition.py` warms the players up (`warm_up` in
+`game_master.py`), then plays the games in order. Each step runs as an asyncio
+task, so `stop()` (Ctrl+C) cancels the warm-up or the game in progress, which is
+discarded: not listed, not saved, not counted. It publishes the game
+master's events plus `CompetitionProgress` (when the warm-up starts, when the
+games start and after every counted game) and `CompetitionFinished`; both carry
+the live `CompetitionState` (results, per-player `PlayerStats`, status
+`warming up`, `running`, `finished`, `aborted` or `stopped`, which the live view's
+status line shows). An aborted game ends the competition.
 
 Results go to `<runs dir>/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, where the runs dir is
 `OLLMPIADA_RUNS_DIR` (default `.local/runs`, see

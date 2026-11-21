@@ -25,7 +25,7 @@ from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
 from ollmpiada.tui import LiveView, results_table, stats_table
-from tests.fakes import Judged, ScriptedPlayer
+from tests.fakes import WARM_UP, Judged, ScriptedPlayer
 
 RESIGN = TurnAnswer(action="resign")
 REAL_SESSION = ChessGame.session
@@ -36,13 +36,13 @@ SECOND_SCRIPT = ["e5", "Qh4#", "e4"]
 
 @pytest.fixture
 def scripted(monkeypatch, models_file):
-    """Make `run` use scripted players, keyed by the name given on the command line, and
-    start no engine."""
+    """Make `run` use scripted players, keyed by the name given on the command line and
+    answering the warm-up call before their script, and start no engine."""
     scripts: dict[str, list] = {}
 
     def fake_create(name, models, *, timeout_s):
         resolve_player(name, models)
-        return ScriptedPlayer(name, scripts[name])
+        return ScriptedPlayer(name, [WARM_UP, *scripts[name]])
 
     monkeypatch.setattr("ollmpiada.cli.create_player", fake_create)
     monkeypatch.setattr(ChessGame, "session", lambda self, settings: nullcontext())
@@ -144,6 +144,18 @@ def test_run_exits_non_zero_when_aborted(scripted, capsys):
     assert "Competition aborted" in out and "Error: basal-mini: refused" in out
 
 
+def test_run_names_the_model_that_fails_its_warm_up(scripted, monkeypatch, capsys):
+    async def refuse(self, request):
+        raise TransportError("connection refused")
+
+    monkeypatch.setattr(ScriptedPlayer, "play", refuse)
+    scripted.update({"local-llm": [], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini"]) == 1
+    out = capsys.readouterr().out
+    assert "Competition aborted: 0 of 2 games played." in out
+    assert "Error: warm-up call to basal-mini failed: connection refused" in out
+
+
 def test_ctrl_c_stops_the_competition_and_keeps_finished_games(
     scripted, models_file, monkeypatch, capsys
 ):
@@ -151,7 +163,8 @@ def test_ctrl_c_stops_the_competition_and_keeps_finished_games(
     play = ScriptedPlayer.play
 
     async def press_ctrl_c_in_game_two(self, request):
-        if self.name == "basal-mini" and len(self.requests) == 2:
+        # Its warm-up and two game-1 answers come first.
+        if self.name == "basal-mini" and len(self.requests) == 3:
             os.kill(os.getpid(), signal.SIGINT)
             await asyncio.sleep(10)
         return await play(self, request)
@@ -238,7 +251,10 @@ def test_show_rejects_a_missing_run(tmp_path, capsys):
 
 
 def play_into(view, tmp_path, first, second, games=2):
-    players = (ScriptedPlayer("model-a", first), ScriptedPlayer("model-b", second))
+    players = (
+        ScriptedPlayer("model-a", [WARM_UP, *first]),
+        ScriptedPlayer("model-b", [WARM_UP, *second]),
+    )
     competition = Competition(
         ChessGame(),
         players,

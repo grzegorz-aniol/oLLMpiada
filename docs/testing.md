@@ -28,7 +28,10 @@ uv run pytest tests/test_x.py -k name   # one test
   resignations, timeouts), so every end-of-game rule in
   [game master](game-master/results.md#end-of-game) is testable offline.
   The fake is `ScriptedPlayer` in `tests/fakes.py`; `tests/conftest.py` holds the
-  shared model config fixtures (`models_data`, `models_file`).
+  shared model config fixtures (`models_data`, `models_file`). A competition calls
+  each player once to [warm it up](architecture.md#competition-runner) before the
+  first game, so a competition script starts with `WARM_UP` (the test helpers
+  prepend it) unless the test is about the warm-up.
 - **Rule: no engine in tests.** Turn-limit adjudication is tested with `Judged`
   in `tests/fakes.py`, chess whose `evaluate` returns prepared scores, and CLI
   tests replace `ChessGame.session` so no engine starts. One test runs the real

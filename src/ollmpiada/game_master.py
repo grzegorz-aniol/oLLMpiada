@@ -195,6 +195,25 @@ async def play_game[S](
     return result
 
 
+def opening_request[S](game: Game[S], *, max_turns: int) -> TurnRequest:
+    """The first turn of a new game, for calls made outside a game."""
+    state = game.new_state()
+    prompt = game.prompt(game.context(state, turn=1, max_turns=max_turns))
+    return TurnRequest(prompt, game.legal_moves(state), move_groups=game.move_groups(state))
+
+
+async def warm_up[S](
+    game: Game[S], player: Player, *, max_turns: int, backoff_s: tuple[float, ...]
+) -> None:
+    """Send the player one opening turn and discard the answer, so a server that loads models
+    on demand has the model ready before the first game.
+
+    Raises:
+        TransportError: The player still failed after the transport retries.
+    """
+    await _call(player, opening_request(game, max_turns=max_turns), backoff_s)
+
+
 async def _call(player: Player, request: TurnRequest, backoff_s: tuple[float, ...]) -> TurnResponse:
     """Call the player, retrying transport failures after each backoff delay; a
     `PermanentError` is raised at once."""

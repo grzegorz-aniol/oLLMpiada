@@ -16,10 +16,11 @@ from rich.table import Column, Table
 
 from ollmpiada.competition import Competition, CompetitionEvent, CompetitionState, load_state
 from ollmpiada.config import ConfigError, Model, Settings, load_models, load_settings
+from ollmpiada.game_master import opening_request
 from ollmpiada.games import GAMES
 from ollmpiada.games.base import Game, GameSetupError, IllegalMove
 from ollmpiada.players import PlayerError, create_player
-from ollmpiada.players.base import Player, TransportError, TurnRequest
+from ollmpiada.players.base import Player, TransportError
 from ollmpiada.tui import LiveView, PlainOutput, results_table, stats_table, summary_lines
 
 DEFAULT_MAX_TURNS = 50
@@ -103,12 +104,9 @@ def _probe(
     except PlayerError as e:
         console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
         return 2
-    state = game.new_state()
-    legal = game.legal_moves(state)
-    prompt = game.prompt(game.context(state, turn=1, max_turns=DEFAULT_MAX_TURNS))
+    request = opening_request(game, max_turns=DEFAULT_MAX_TURNS)
     console.print(f"Probing {name} with the opening position of {game.name}...")
     try:
-        request = TurnRequest(prompt, legal, move_groups=game.move_groups(state))
         response = asyncio.run(player.play(request))
     except TransportError as e:
         console.print(f"[red]Transport error:[/red] {escape(str(e))}", highlight=False)
@@ -123,8 +121,8 @@ def _probe(
         table.add_row("Parsed", escape(repr(response.answer)))
         if response.answer.action == "move":
             try:
-                move = game.parse_move(state, response.answer.move or "")
-                table.add_row("Move", f"[green]legal[/green] ({legal[move]})")
+                move = game.parse_move(game.new_state(), response.answer.move or "")
+                table.add_row("Move", f"[green]legal[/green] ({request.legal_moves[move]})")
             except IllegalMove as e:
                 table.add_row("Move", f"[red]illegal:[/red] {escape(str(e))}")
     table.add_row("Time", f"{response.elapsed_s:.2f} s")

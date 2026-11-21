@@ -5,18 +5,18 @@ import dataclasses
 import hashlib
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game
+from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game, warm_up
 from ollmpiada.games.base import Game, Side
-from ollmpiada.players.base import Player, Usage
+from ollmpiada.players.base import Player, TransportError, Usage
 from ollmpiada.players.llm import ANSWER_FORMAT
 
-Status = Literal["running", "finished", "aborted", "stopped"]
+Status = Literal["warming up", "running", "finished", "aborted", "stopped"]
 
 
 @dataclass
@@ -203,14 +203,46 @@ class Competition:
     async def run(self) -> CompetitionState:
         self.run_dir.parent.mkdir(parents=True, exist_ok=True)
         self.run_dir.mkdir()  # fails loudly instead of mixing two runs started in one second
+        self.state.status = "warming up"
         self._save()
         self._publish(CompetitionProgress(self.state))
+        try:
+            await self._until_stopped(self._warm_up())
+        except TransportError as e:
+            self.state.status, self.state.error = "aborted", str(e)
+        if self.state.status == "warming up" and not self._stop_requested:
+            self.state.status = "running"
+            self._publish(CompetitionProgress(self.state))
+            await self._play_games()
+
+        if self.state.status in ("warming up", "running"):
+            self.state.status = "stopped" if self._stop_requested else "finished"
+        self._save()
+        self._publish(CompetitionFinished(self.state))
+        return self.state
+
+    async def _warm_up(self) -> None:
+        """Warm every player up; the first player moves first in game 1, so it goes last and a
+        server that keeps one model loaded at a time still holds it when the game starts.
+
+        Raises:
+            TransportError: A player failed the warm-up; the message names it.
+        """
+        for player in reversed(self._players):
+            try:
+                await warm_up(
+                    self._game, player, max_turns=self.state.max_turns, backoff_s=self._backoff_s
+                )
+            except TransportError as e:
+                raise TransportError(f"warm-up call to {player.name} failed: {e}") from e
+
+    async def _play_games(self) -> None:
         for number in range(1, self.state.games + 1):
             if self._stop_requested:
-                break
+                return
             first, second = self._players
             pair = (first, second) if number % 2 == 1 else (second, first)
-            self._current = asyncio.create_task(
+            result = await self._until_stopped(
                 play_game(
                     self._game,
                     pair,
@@ -220,25 +252,25 @@ class Competition:
                     backoff_s=self._backoff_s,
                 )
             )
-            try:
-                result = await self._current
-            except asyncio.CancelledError:
-                if not self._stop_requested:
-                    raise
-                break
-            finally:
-                self._current = None
+            if result is None:
+                return
             self._record(result)
             if result.outcome is None:
                 self.state.status, self.state.error = "aborted", result.error
-                break
+                return
             self._publish(CompetitionProgress(self.state))
 
-        if self.state.status == "running":
-            self.state.status = "stopped" if self._stop_requested else "finished"
-        self._save()
-        self._publish(CompetitionFinished(self.state))
-        return self.state
+    async def _until_stopped[T](self, step: Coroutine[object, object, T]) -> T | None:
+        """Run `step` as a task that `stop()` cancels; None when it was stopped."""
+        self._current = asyncio.create_task(step)
+        try:
+            return await self._current
+        except asyncio.CancelledError:
+            if not self._stop_requested:
+                raise
+            return None
+        finally:
+            self._current = None
 
     def _record(self, result: GameResult) -> None:
         summary = GameSummary.of(result)

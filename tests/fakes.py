@@ -11,6 +11,8 @@ from ollmpiada.players.base import TurnAnswer, TurnRequest, TurnResponse, Usage
 
 USAGE = Usage(input_tokens=100, output_tokens=10, reasoning_tokens=0)
 Step = str | TurnAnswer | TurnResponse | Exception
+WARM_UP: Step = "e4"
+"""A script's first step in a competition: the answer to the warm-up call, which is discarded."""
 
 
 class ScriptedPlayer:
