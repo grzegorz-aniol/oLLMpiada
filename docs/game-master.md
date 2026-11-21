@@ -25,7 +25,7 @@ interface, so the game master, players and UI never import chess directly:
 | `parse_move(state, text)` | Turns a model's move text into a legal move id, or raises with a reason |
 | `apply(state, move_id)` | Next state |
 | `outcome(state)` | `None` while the game runs, else winner or draw with a reason |
-| `describe(state)` | Position text for the prompt (board, history, extra facts) |
+| `describe(state)` | Position text for the prompt (board, recent moves, facts the rules need) |
 | `side_names` | Display names of the two sides (for chess `White`, `Black`), used in tables and summaries |
 | `render(state)` | Board for the terminal UI, as a Rich renderable |
 | `context(state, ...)` | The prompt context for the side to move: position, legal moves, turn, draw offer, rejection (implemented once in the base class) |
@@ -35,19 +35,16 @@ interface, so the game master, players and UI never import chess directly:
 - **Rule:** a new game adds one module under `games/`, its prompt text and one
   registry entry; the game master, players, statistics, runner and terminal UI do
   not change.
-- Chess uses the `chess` library for everything above. `parse_move` accepts SAN
-  (`Nf3`) and UCI (`g1f3`), case and check-mark tolerant. An answer that fits
-  several legal moves is rejected with every reading, so the retry can fix it:
-  under-specified SAN (`Nd2` with knights on b1 and f1) or a case-blind match
-  (`BXC4`: pawn or bishop).
+- Chess uses the `chess` library for everything above. What its `parse_move`
+  accepts is described under [validation](#validation-and-retries).
 - States are immutable: `apply` returns a new state, so the game master can keep
   the position before a move.
 
 ## Turn loop
 
-1. Build the turn context: game rules, side to move, position description, move
-   history, legal moves, turn number and limit, a pending draw offer, and the
-   reason the previous attempt was rejected (on a retry).
+1. Build the turn context: game rules, side to move, position description
+   (with the recent moves), legal moves, turn number and limit, a pending draw
+   offer, and the reason the previous attempt was rejected (on a retry).
 2. Render the shared prompt from it, a system and a user part (see
    [prompts](#prompts)), and send it to the player through its adapter, which
    adds the answer format.
@@ -72,7 +69,7 @@ characters) and the reason.
   `AnswerReceived` and the live view's request count. A decision player answers a
   turn with one query, also when it asks for the piece first (see
   [answer formats](#answer-formats)), so that turn is one request too.
-- **Decision:** every turn is a fresh, stateless request carrying the full state.
+- **Decision:** every turn is a fresh, stateless request carrying the full position.
   There is no conversation history between turns: both players get the same
   information, context stays bounded, and decision models are stateless anyway.
 - **Rule:** sides alternate: in game *n* of a competition the first selected
@@ -104,12 +101,23 @@ System part, in order:
 User part, in order:
 
 1. **Position** - move number, side to move, the board (for chess: FEN plus an
-   ASCII diagram with coordinates), full move history (SAN), the opponent's last
-   move, this turn against the limit and turns left, a pending draw offer.
+   ASCII diagram with coordinates), the recent moves (SAN with move numbers), the
+   opponent's last move, the halfmove clock, a warning when the current position
+   has occurred before, this turn against the limit and turns left, a pending
+   draw offer.
 2. **Legal moves** - every legal move label and the instruction to pick one. Both
    players get it, so it does not favor either; it turns a test of rule recall
    into a test of play.
 3. **Previous attempt** (retries only) - the rejected answer and why.
+
+- **Decision:** chess shows only the last `RECENT_PLIES` (2) plies, the
+  opponent's last move and the player's own previous one, not the full move
+  history: FEN and board carry the position, and the halfmove clock
+  (`Halfmove clock: N (automatic draw at 100)`) carries the 50-move rule. The
+  repetition line is only a hint that positions are repeating: it reports that
+  the current position has occurred twice, so a move into another position seen
+  twice before can still end the game by threefold repetition without a warning.
+  The system part says these lines exist.
 
 Templates live next to their game as plain text files
 (`games/chess_system_prompt.txt`, `games/chess_user_prompt.txt`) so they can be
@@ -219,6 +227,21 @@ a missing or illegal move, or the action is `accept_draw` with no pending offer.
   draws. A failure that depends only on the position and the configuration (more
   piece groups than `max_options`) is a `PermanentError`, a `TransportError` that
   is never retried: it aborts at once with the same error.
+- **Rule:** chess `parse_move` reads the move inside common answer habits before
+  matching: it strips whitespace, markdown and quoting wrappers (`**e4**`,
+  `` `e4` ``, quotes, parentheses), `!`, `?`, `.`, `,`, `;` and `…` at either end, move-number
+  prefixes (`1. e4`, `1.e4`, `12... Nf6`, `12. ...Nf6`) and an en passant mark
+  (`exd6 e.p.`, `exd6 ep`), and joins split squares (`e2 e4`). It then tries the
+  exact UCI id (`g1f3`, any case), SAN (`Nf3`, `Ng1-f3`, `Nf3+`, `e8=Q`), then a
+  loose match that ignores case and check marks and reads `0-0` as `O-O`. An
+  answer that fits several legal moves is rejected with every reading, so the
+  retry can fix it: under-specified SAN (`Nd2` with knights on b1 and f1) or a
+  case-blind match (`BXC4`: pawn or bishop). A promotion without a piece
+  (`e7e8`, `e8`) is rejected with its own reason naming an example (`e7e8q`), or
+  as ambiguous when it can also read as another move (`bxc8` with a bishop that
+  can also take on c8).
+  Player adapters pass the move text through unchanged, so this is the only
+  place answers are cleaned.
 - Players raise `TransportError` for every failed call, HTTP 4xx included (bad
   request, authentication, a decision server refusing too many options): a retry
   rarely fixes those, but they are not the model's answer either, so they stop the

@@ -15,7 +15,8 @@ A referee enforces these rules:
 - Illegal answers: an answer with a missing or illegal move is rejected and you must
   answer again. Your third rejected answer in the same turn loses the game.
 - Automatic draws: stalemate, insufficient material, threefold repetition and the
-  50-move rule end the game in a draw immediately.
+  50-move rule end the game in a draw immediately. The position shows the halfmove
+  clock for the 50-move rule and says when the current position has occurred before.
 - Resigning: answer with the action resign to give up; your opponent wins. Resign
   only in a hopeless position.
 - Draw offers: you may offer a draw together with your move. The offer is open for

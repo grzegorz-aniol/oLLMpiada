@@ -90,6 +90,7 @@ def test_insufficient_material_is_a_draw():
         ("G1F3", "g1f3"),
         ("nf3", "g1f3"),
         ("NF3", "g1f3"),
+        ("Ng1-f3", "g1f3"),
         ("  Nf3+ ", "g1f3"),
         ("Nf3!?", "g1f3"),
         ("e4", "e2e4"),
@@ -99,16 +100,93 @@ def test_parse_opening_move_variants(text, move_id):
     assert game.parse_move(game.new_state(), text) == move_id
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1. e4",
+        "1.e4",
+        "1... e4",
+        "1. ...e4",
+        "e4.",
+        "e4,",
+        "e4;",
+        "e4\r\n",
+        "e4\r",
+        "e4\u00a0",
+        "1.\u00a0e4",
+        "e2\u00a0e4",
+        " e4 ",
+        "e4…",
+        "**e4**",
+        "`e4`",
+        '"e4"',
+        "'e4'",
+        "(e4)",
+        "**1. e4.**",
+        "e2 e4",
+        "E2 E4",
+        "e2 - e4",
+    ],
+)
+def test_parse_tolerates_move_numbers_wrappers_punctuation_and_split_squares(text):
+    assert game.parse_move(game.new_state(), text) == "e2e4"
+
+
+def test_parse_strips_a_move_number_before_san():
+    state = play("e4", "e5", "Nf3")
+    assert game.parse_move(state, "2... Nc6") == "b8c6"
+    assert game.parse_move(state, "2. ...Nc6") == "b8c6"
+
+
+PROMOTION = "8/4P3/8/8/8/8/k7/4K3 w - - 0 1"
+
+
 @pytest.mark.parametrize("text", ["e8=Q+", "e8=Q", "e8=q", "e8Q", "e7e8q", "E7E8Q"])
 def test_parse_promotion_variants(text):
-    state = chess.Board("8/4P3/8/8/8/8/k7/4K3 w - - 0 1")
-    assert game.parse_move(state, text) == "e7e8q"
+    assert game.parse_move(chess.Board(PROMOTION), text) == "e7e8q"
 
 
-@pytest.mark.parametrize("text", ["O-O", "0-0", "o-o"])
-def test_parse_castling_variants(text):
+@pytest.mark.parametrize("text", ["e8=N", "e8N", "e7e8n"])
+def test_parse_underpromotion(text):
+    assert game.parse_move(chess.Board(PROMOTION), text) == "e7e8n"
+
+
+@pytest.mark.parametrize("text", ["e7e8", "e8", "e7-e8"])
+def test_missing_promotion_piece_has_its_own_reason(text):
+    with pytest.raises(IllegalMove, match="is a promotion and needs a piece, e.g. e7e8q"):
+        game.parse_move(chess.Board(PROMOTION), text)
+
+
+@pytest.mark.parametrize(
+    ("text", "move_id"),
+    [
+        ("O-O", "e1g1"),
+        ("0-0", "e1g1"),
+        ("o-o", "e1g1"),
+        ("e1g1", "e1g1"),
+        ("O-O-O", "e1c1"),
+        ("0-0-0", "e1c1"),
+        ("e1c1", "e1c1"),
+    ],
+)
+def test_parse_castling_variants(text, move_id):
     state = chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1")
-    assert game.parse_move(state, text) == "e1g1"
+    assert game.parse_move(state, text) == move_id
+
+
+@pytest.mark.parametrize(
+    "text", ["exd6", "e5d6", "exd6 e.p.", "exd6 ep", "exd6e.p.", "exd6 (e.p.)"]
+)
+def test_parse_en_passant_right_after_the_double_step(text):
+    state = play("e4", "a6", "e5", "d5")
+    assert game.parse_move(state, text) == "e5d6"
+
+
+def test_en_passant_is_illegal_once_the_moment_has_passed():
+    state = play("e4", "a6", "e5", "d5", "Nf3", "a5")
+    for text in ("exd6", "e5d6", "exd6 e.p."):
+        with pytest.raises(IllegalMove, match="not a legal move"):
+            game.parse_move(state, text)
 
 
 def test_case_decides_between_pawn_and_bishop_captures():
@@ -117,6 +195,15 @@ def test_case_decides_between_pawn_and_bishop_captures():
     assert game.parse_move(state, "Bxc4") == "e2c4"
     with pytest.raises(IllegalMove, match="ambiguous: it could be Bxc4 or bxc4"):
         game.parse_move(state, "BXC4")
+
+
+def test_promotion_without_a_piece_that_also_reads_as_a_bishop_capture_is_ambiguous():
+    state = chess.Board("2r1k3/1P6/4B3/8/8/8/8/4K3 w - - 0 1")
+    for text in ("bxc8", "BXC8"):
+        with pytest.raises(IllegalMove, match=r"ambiguous: it could be Bxc8 or bxc8=B or "):
+            game.parse_move(state, text)
+    assert game.parse_move(state, "Bxc8") == "e6c8"
+    assert game.parse_move(state, "bxc8=Q") == "b7c8q"
 
 
 @pytest.mark.parametrize(
@@ -137,22 +224,53 @@ def test_disambiguated_san_is_accepted():
     assert game.parse_move(state, "nfd2") == "f1d2"
 
 
-@pytest.mark.parametrize("text", ["e5", "e2e5", "Ke2", "", "--", "0000", "resign"])
+@pytest.mark.parametrize(
+    "text", ["e5", "e2e5", "Ke2", "", "--", "0000", "resign", "1.", "**", "e4 e5", "1. e4 e5"]
+)
 def test_illegal_or_unreadable_moves_are_rejected(text):
     with pytest.raises(IllegalMove, match="not a legal move"):
         game.parse_move(game.new_state(), text)
 
 
-def test_describe_has_fen_board_with_coordinates_history_and_check():
+def test_describe_has_fen_board_with_coordinates_recent_moves_and_check():
     text = game.describe(play("e4", "f5", "Qh5+"))
     assert "FEN: rnbqkbnr/ppppp1pp/8/5p1Q/4P3/8/PPPP1PPP/RNB1KBNR b KQkq - 1 2" in text
     assert "8 | r n b q k b n r" in text
     assert "5 | . . . . . p . Q" in text
     assert "    a b c d e f g h" in text
-    assert "Move history: 1. e4 f5 2. Qh5+" in text
+    assert "Recent moves: 1...f5 2. Qh5+\n" in text
     assert "Black to move" in text and "Black is in check." in text
     assert "Last move: White played Qh5+." in text
-    assert "Last move" not in game.describe(game.new_state())
+    assert "Halfmove clock: 1 (automatic draw at 100)" in text
+
+
+def test_describe_of_the_first_move_has_no_recent_moves():
+    text = game.describe(game.new_state())
+    assert "Recent moves: none yet" in text
+    assert "Halfmove clock: 0 (automatic draw at 100)" in text
+    assert "Last move" not in text and "occurred" not in text
+    assert "Recent moves: 1. e4\n" in game.describe(play("e4"))
+
+
+def test_describe_shows_only_the_last_two_plies_with_their_move_numbers():
+    def recent(*moves: str) -> str:
+        return next(line for line in game.describe(play(*moves)).splitlines() if "Recent" in line)
+
+    assert recent("e4", "e5", "Nf3", "Nc6", "Bb5") == "Recent moves: 2...Nc6 3. Bb5"
+    assert recent("e4", "e5", "Nf3", "Nc6", "Bb5", "a6") == "Recent moves: 3. Bb5 a6"
+
+
+def test_describe_counts_the_halfmove_clock_and_warns_of_a_repeated_position():
+    shuffle = ["Nf3", "Nf6", "Ng1", "Ng8"]
+    once = play(*shuffle[:3])
+    assert "Halfmove clock: 3 (automatic draw at 100)" in game.describe(once)
+    assert "occurred" not in game.describe(once)
+    twice = play(*shuffle)
+    assert "This position has now occurred twice; a third time is an automatic draw." in (
+        game.describe(twice)
+    )
+    assert "Halfmove clock: 4 (automatic draw at 100)" in game.describe(twice)
+    assert "Halfmove clock: 0 " in game.describe(play(*shuffle, "e4"))
 
 
 def test_render_shows_pieces_coordinates_and_highlights_last_move():
@@ -219,6 +337,10 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     assert "playing a game of chess as White" in prompt.system and "win" in prompt.system
     assert "at most 40 moves" in prompt.system
     assert "FEN" not in prompt.system and "Nf3" not in prompt.system
+    assert (
+        "The position shows the halfmove clock for the 50-move rule and says when the current "
+        "position has occurred before." in " ".join(prompt.system.split())
+    )
 
     assert sections(prompt.user) == ["POSITION", "LEGAL MOVES"]
     assert "move 1 of 40 (40 left" in prompt.user

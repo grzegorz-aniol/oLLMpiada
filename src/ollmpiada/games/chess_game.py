@@ -23,6 +23,16 @@ REASONS = {
 LIGHT, DARK = "on #b08a5a", "on #7a5a3a"
 LIGHT_LAST, DARK_LAST = "on #8f7f2a", "on #7f8a2e"
 PIECE_STYLES = {chess.WHITE: "bold #ffffff", chess.BLACK: "bold #000000"}
+# The position text shows only the opponent's last move and the player's own previous one;
+# the board and FEN carry the position, and the draw-rule lines carry what history would.
+RECENT_PLIES = 2
+# Whitespace (any Unicode kind) and characters no move contains, so answers wrapped in
+# markdown, quotes or punctuation still read as the move inside.
+EDGE_CLASS = r"[\s*`\"'“”‘’()!?.,;…]"
+EDGE = re.compile(rf"^{EDGE_CLASS}+|{EDGE_CLASS}+$")
+MOVE_NUMBER = re.compile(r"^\d+\s*[.…][.…\s]*")
+EN_PASSANT_MARK = re.compile(r"(?<=[1-8+#])\s*\(?e\.?\s*p\.?$", re.IGNORECASE)
+SPLIT_SQUARES = re.compile(r"^([a-h][1-8])[\s-]+(?=[a-h][1-8])", re.IGNORECASE)
 
 
 def _side(color: chess.Color) -> Side:
@@ -32,6 +42,13 @@ def _side(color: chess.Color) -> Side:
 def _loose(move_text: str) -> str:
     """Case, check marks and zero-for-O castling ignored."""
     return move_text.rstrip("+#").lower().replace("0", "o")
+
+
+def _normalized(text: str) -> str:
+    """`**12... exd6 e.p.**` -> `exd6`, `e2 e4` -> `e2e4`: the move without what models add."""
+    move = EDGE.sub("", MOVE_NUMBER.sub("", EDGE.sub("", text)))
+    move = EN_PASSANT_MARK.sub("", move)
+    return SPLIT_SQUARES.sub(r"\1", move)
 
 
 def _undisambiguated(san: str) -> str:
@@ -67,7 +84,7 @@ class ChessGame(Game[chess.Board]):
 
     def parse_move(self, state: chess.Board, text: str) -> str:
         legal = self.legal_moves(state)
-        move_text = text.strip().rstrip("!?")
+        move_text = _normalized(text)
         if move_text.lower() in legal:
             return move_text.lower()
         try:
@@ -82,11 +99,23 @@ class ChessGame(Game[chess.Board]):
             for uci, san in legal.items()
             if loose in (_loose(san), _loose(_undisambiguated(san)))
         ]
-        if len(matches) == 1:
+        # A promotion without its piece is one more reading: `bxc8` can be the pawn
+        # promoting or, case-blind, a bishop taking on c8.
+        promotions = [
+            uci
+            for uci, san in legal.items()
+            if len(uci) == 5 and loose in (uci[:4], _loose(san).split("=")[0])
+        ]
+        if len(matches) == 1 and not promotions:
             return matches[0]
         if matches:
-            readings = " or ".join(sorted(legal[uci] for uci in matches))
+            readings = " or ".join(sorted(legal[uci] for uci in matches + promotions))
             raise IllegalMove(f"{text!r} is ambiguous: it could be {readings}")
+        if promotions:
+            queen = promotions[0][:4] + "q"
+            raise IllegalMove(
+                f"{text!r} is a promotion and needs a piece, e.g. {queen} or {legal[queen]}"
+            )
         raise IllegalMove(f"{text!r} is not a legal move in this position")
 
     def apply(self, state: chess.Board, move_id: str) -> chess.Board:
@@ -116,16 +145,25 @@ class ChessGame(Game[chess.Board]):
             )
             for rank in range(7, -1, -1)
         ]
-        history = state.root().variation_san(state.move_stack) or "none yet"
+        recent = state.move_stack[-RECENT_PLIES:]
+        before_recent = state.copy()
+        for _ in recent:
+            before_recent.pop()
+        recent_san = before_recent.variation_san(recent) or "none yet"
         to_move = self.side_name(_side(state.turn))
         facts = [
             f"FEN: {state.fen()}",
             "Board (White at the bottom; uppercase = White, lowercase = Black, . = empty):",
             *rows,
             "    a b c d e f g h",
-            f"Move history: {history}",
+            f"Recent moves: {recent_san}",
             f"Move number {state.fullmove_number}, {to_move} to move.",
+            f"Halfmove clock: {state.halfmove_clock} (automatic draw at 100)",
         ]
+        # A hint that positions are repeating, not a complete warning: it counts only the
+        # current position, which a prompt only ever sees twice (a third time ends the game).
+        if state.is_repetition(2):
+            facts.append("This position has now occurred twice; a third time is an automatic draw.")
         if state.move_stack:
             before = state.copy()
             last = before.pop()
