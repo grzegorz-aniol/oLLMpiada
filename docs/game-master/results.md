@@ -28,10 +28,11 @@ How a game ends, how the turn limit is adjudicated, and how statistics are count
 - **Rule:** a game still running when both sides have made `max_turns` moves is
   adjudicated (`Game.adjudicate`) from its final position, and only then: there is
   no early adjudication during the game. For chess, Stockfish analyses the position
-  to `ADJUDICATION_LIMIT` (depth 16, well under a second per position; capped at
-  5 seconds so a hung engine times out) and the
-  score from White's view decides: at least `ADJUDICATION_WIN_CP` (500 centipawns,
-  5 pawns) for one side, or a forced mate for it, wins; anything else is a draw.
+  to `ADJUDICATION_LIMIT` (depth 16, well under a second per position; its 5-second
+  time cap makes python-chess give up on a hung engine after that time plus its
+  10-second communication timeout, about 15 seconds) and the score from White's
+  view decides: at least `ADJUDICATION_WIN_CP` (500 centipawns, 5 pawns) for one
+  side, or a forced mate for it, wins; anything else is a draw.
   The outcome's `score` keeps the evaluation, as centipawns from White's view
   (`+612 cp`, `-48 cp`) or a mate in N moves (`#+3` White mates, `#-2` Black
   mates), and the PGN ends with it as a comment (`{ Stockfish: +612 cp }`). The

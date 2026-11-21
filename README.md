@@ -24,9 +24,11 @@ playing against itself with a different strategy.
 
 One terminal command picks two models, a game and the number of games; a game
 master referees every move, and the terminal shows the board (visual mode) or just
-live status (background mode) with statistics: wins, losses, draws, thinking time,
-token usage and illegal attempts. The same command runs unattended from scripts,
-and every competition is saved to `.local/runs/`.
+live status (background mode) with statistics: wins, losses and draws (each with
+games [adjudicated](docs/game-master/results.md#statistics) at the turn limit
+counted separately), thinking time, token usage and illegal attempts. The same
+command runs unattended from scripts, and every competition is saved to
+`.local/runs/`.
 
 Each game is a separate module behind one interface, so games other than chess
 can be added without touching the referee or the terminal UI.
