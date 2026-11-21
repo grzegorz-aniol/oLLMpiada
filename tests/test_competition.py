@@ -3,6 +3,7 @@ import dataclasses
 import json
 
 import pytest
+from chess.engine import Cp, Mate
 
 from ollmpiada.competition import (
     Competition,
@@ -15,12 +16,12 @@ from ollmpiada.game_master import GameStarted, MoveMade
 from ollmpiada.games.base import Prompt
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
-from tests.fakes import ScriptedPlayer
+from tests.fakes import Judged, ScriptedPlayer
 
 RESIGN = TurnAnswer(action="resign")
 
 
-def compete(a_script, b_script, tmp_path, *, games=2, on_event=None):
+def compete(a_script, b_script, tmp_path, *, games=2, on_event=None, game=None, max_turns=20):
     a = ScriptedPlayer("model-a@high", a_script)
     b = ScriptedPlayer("model-b", b_script)
     events = []
@@ -32,10 +33,10 @@ def compete(a_script, b_script, tmp_path, *, games=2, on_event=None):
             on_event(competition, event)
 
     competition = Competition(
-        ChessGame(),
+        game or ChessGame(),
         (a, b),
         games=games,
-        max_turns=20,
+        max_turns=max_turns,
         runs_dir=tmp_path / ".local" / "runs",
         publish=publish,
         backoff_s=(0, 0),
@@ -98,6 +99,36 @@ def test_results_are_saved_after_every_game(tmp_path):
     assert first["move"] == "f3" and first["attempts"][0]["elapsed_s"] == 1.0
     assert first["attempts"][0]["usage"]["input_tokens"] == 100
     assert (run_dir / "game-002.pgn").exists()
+    assert load_state(run_dir) == state
+
+
+def test_adjudicated_results_are_counted_apart_from_results_on_the_board(tmp_path):
+    # One move per side: a wins game 1 as White (+6 pawns) and game 2 as Black (mated
+    # White), game 3 is under the threshold; in game 4 b resigns as White on the board.
+    game = Judged(Cp(600), Mate(-2), Cp(120))
+    state, competition, _ = compete(
+        ["e4", "e5", "e4"], ["e5", "e4", "e5", RESIGN], tmp_path, games=4, game=game, max_turns=1
+    )
+    assert [(r.result, r.reason, r.score) for r in state.results] == [
+        ("1-0", "adjudication", "+600 cp"),
+        ("0-1", "adjudication", "#-2"),
+        ("1/2-1/2", "adjudication", "+120 cp"),
+        ("0-1", "resignation", None),
+    ]
+    buckets = ("wins", "losses", "draws", "adjudicated_wins", "adjudicated_losses",
+               "adjudicated_draws")  # fmt: skip
+    a, b = state.stats["model-a@high"], state.stats["model-b"]
+    assert [getattr(a, k) for k in buckets] == [1, 0, 0, 2, 0, 1]
+    assert [getattr(b, k) for k in buckets] == [0, 1, 0, 0, 2, 1]
+    assert a.games == b.games == 4
+
+    run_dir = competition.run_dir
+    saved = read_json(run_dir / "game-001.json")
+    assert (saved["reason"], saved["score"]) == ("adjudication", "+600 cp")
+    assert read_json(run_dir / "competition.json")["stats"]["model-b"]["adjudicated_losses"] == 2
+    pgn = (run_dir / "game-002.pgn").read_text()
+    assert '[Termination "adjudication"]' in pgn
+    assert pgn.strip().endswith("1. e4 e5 { Stockfish: #-2 } 0-1")
     assert load_state(run_dir) == state
 
 

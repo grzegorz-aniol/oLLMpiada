@@ -1,5 +1,5 @@
 ---
-related: ["README.md", "architecture.md", "game-master.md"]
+related: ["README.md", "architecture.md", "game-master/README.md"]
 ---
 
 # Product
@@ -35,13 +35,13 @@ of each finished game and per-player statistics:
 | Statistic | Meaning |
 | --- | --- |
 | Games | Finished games the player took part in |
-| Wins / losses / draws | Per player, with the reason each game ended |
+| Wins / losses / draws | Per player, with the reason each game ended; games adjudicated at the turn limit are counted apart |
 | Thinking time | Total and per-move wall-clock time of the model calls |
 | Tokens | Input, output and reasoning tokens, when the provider reports them |
 | Illegal attempts | Responses the game master rejected |
 
 The rules of refereeing, prompting and scoring are owned by
-[game master](game-master.md).
+[game master](game-master/README.md).
 
 - **Decision:** the MVP has a terminal UI, not a web UI. One command starts a
   competition with no server to run or browser to open, and the same command can
@@ -57,6 +57,8 @@ The rules of refereeing, prompting and scoring are owned by
 - Production quality: no authentication, no multi-user support, no database.
 - Polished UX: the UI is simple and clean, nothing more.
 - Chess engines or humans as players. A player is always a configured model.
+  Stockfish only referees: it judges the final position of a game that reaches
+  the turn limit (see [end of game](game-master/results.md#end-of-game)).
 
 ## Stack
 
@@ -66,8 +68,9 @@ The rules of refereeing, prompting and scoring are owned by
   projects, and leaves room for agent-style players with tools later.
 - **httpx** - calls to decision models, which speak the SystemOne API rather than
   a chat API.
-- **chess** (python-chess) - move generation, validation, end-of-game detection
-  and PGN export.
+- **chess** (python-chess) - move generation, validation, end-of-game detection,
+  PGN export and the UCI client that talks to Stockfish.
+- **Stockfish** (installed separately) - judges positions at the turn limit.
 - **Rich** - the terminal UI: a live-updating view with tables and a colored board.
 - **argparse** (standard library) - command-line subcommands and flags.
 - **python-dotenv** - loads provider tokens from `.env` at startup.

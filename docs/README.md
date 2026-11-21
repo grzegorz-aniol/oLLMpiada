@@ -14,7 +14,7 @@ for every change, then only the subject you touch; you do not need every sibling
 | --- | --- |
 | What the project is, who it is for, scope and non-goals | [Product](product.md) |
 | Components, data flow, CLI commands and terminal UI, where code lives | [Architecture](architecture.md) |
-| Refereeing: game interface, turns, prompts, answers, end of game, statistics | [Game master](game-master.md) |
+| Refereeing: game interface, turns, prompts, answers, end of game, statistics | [Game master](game-master/README.md) |
 | Model config file, providers, tokens, environment variables | [Configuration](configuration.md) |
 | Coding rules that apply to every change | [Conventions](conventions.md) |
 | Setup, commands, agent configuration, contribution workflow | [Development](development.md) |

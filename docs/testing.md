@@ -26,9 +26,13 @@ uv run pytest tests/test_x.py -k name   # one test
 - **Rule: no real models in tests.** Game master, competition and UI tests use
   scripted fake players that return prepared answers (legal moves, illegal moves,
   resignations, timeouts), so every end-of-game rule in
-  [game master](game-master.md#end-of-game) is testable offline.
+  [game master](game-master/results.md#end-of-game) is testable offline.
   The fake is `ScriptedPlayer` in `tests/fakes.py`; `tests/conftest.py` holds the
   shared model config fixtures (`models_data`, `models_file`).
+- **Rule: no engine in tests.** Turn-limit adjudication is tested with `Judged`
+  in `tests/fakes.py`, chess whose `evaluate` returns prepared scores, and CLI
+  tests replace `ChessGame.session` so no engine starts. One test runs the real
+  Stockfish and is skipped when it is not installed.
 - Player adapters are tested against recorded HTTP exchanges or PydanticAI's
   `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI and Anthropic
   clients take an `httpx2` client (`httpx2.MockTransport`); the decision player

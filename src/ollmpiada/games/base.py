@@ -2,12 +2,17 @@
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from string import Template
 
 from rich.console import RenderableType
+
+from ollmpiada.config import Settings
+
+ADJUDICATION = "adjudication"
 
 
 class Side(StrEnum):
@@ -25,10 +30,24 @@ class Outcome:
 
     winner: Side | None
     reason: str
+    score: str | None = None
+    """The evaluation an adjudicated game was judged by; None for a game decided on the board."""
+
+    @property
+    def adjudicated(self) -> bool:
+        return self.reason == ADJUDICATION
 
 
 class IllegalMove(ValueError):
     """A model's move text is not a legal move; the message is the reason shown to it."""
+
+
+class GameSetupError(Exception):
+    """The game cannot start what it needs to referee; the message says how to fix it."""
+
+
+class AdjudicationError(Exception):
+    """The game cannot judge a position at the turn limit; the game master aborts the game."""
 
 
 @dataclass(frozen=True)
@@ -96,6 +115,24 @@ class Game[S](ABC):
     @abstractmethod
     def outcome(self, state: S) -> Outcome | None:
         """The result once the rules end the game, else None."""
+
+    @abstractmethod
+    def adjudicate(self, state: S) -> Outcome:
+        """The result of a game still running when both sides reached the turn limit, with
+        reason `ADJUDICATION` and the `score` it was judged by.
+
+        Raises:
+            AdjudicationError: What judges the position failed (for chess the engine).
+        """
+
+    @contextmanager
+    def session(self, settings: Settings) -> Iterator[None]:
+        """Hold what `adjudicate` needs (for chess the engine) for one competition.
+
+        Raises:
+            GameSetupError: It cannot be started.
+        """
+        yield
 
     @abstractmethod
     def describe(self, state: S) -> str:

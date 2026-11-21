@@ -61,4 +61,4 @@ must also run belongs in a skill, because Codex has no project commands.
 - Tests never call a real model; they use scripted fake players (see
   [testing](docs/testing.md)).
 - Both players of a game get the same prompt text; only the answer format differs.
-  The rule is owned by [game master](docs/game-master.md#prompts).
+  The rule is owned by [game master](docs/game-master/prompts.md#prompts).

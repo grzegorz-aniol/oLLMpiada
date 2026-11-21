@@ -2,6 +2,7 @@ import asyncio
 
 import chess
 import pytest
+from chess.engine import Cp, EngineTerminatedError, Mate
 
 from ollmpiada.game_master import (
     AnswerReceived,
@@ -14,7 +15,7 @@ from ollmpiada.game_master import (
 from ollmpiada.games.base import Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer
-from tests.fakes import USAGE, ScriptedPlayer, unreadable
+from tests.fakes import USAGE, Judged, ScriptedPlayer, unreadable
 
 RESIGN = TurnAnswer(action="resign")
 ACCEPT = TurnAnswer(action="accept_draw")
@@ -24,6 +25,7 @@ class ChessFrom(ChessGame):
     """Chess starting from a given position, to reach rare endings in a move or two."""
 
     def __init__(self, fen: str) -> None:
+        super().__init__()
         self.fen = fen
 
     def new_state(self) -> chess.Board:
@@ -58,7 +60,7 @@ def test_turn_request_carries_the_legal_moves_and_their_groups():
     assert request.move_groups == ChessGame().move_groups(state)
 
 
-# --- end of game: one test per row of docs/game-master.md#end-of-game ---
+# --- end of game: one test per row of docs/game-master/results.md#end-of-game ---
 
 
 def test_checkmate_wins_for_the_mating_side():
@@ -107,11 +109,71 @@ def test_fifty_move_rule_is_claimed():
     assert result.outcome == Outcome(None, "50-move rule")
 
 
-def test_turn_limit_ends_after_both_sides_made_max_turns_moves():
-    result, white, black = run(["e4", "Nf3"], ["e5", "Nc6"], max_turns=2)
-    assert result.outcome == Outcome(None, "turn limit")
+@pytest.mark.parametrize(
+    ("score", "outcome"),
+    [
+        (Cp(500), Outcome(Side.FIRST, "adjudication", "+500 cp")),
+        (Cp(-731), Outcome(Side.SECOND, "adjudication", "-731 cp")),
+        (Mate(3), Outcome(Side.FIRST, "adjudication", "#+3")),
+        (Mate(-1), Outcome(Side.SECOND, "adjudication", "#-1")),
+        (Cp(499), Outcome(None, "adjudication", "+499 cp")),
+        (Cp(-499), Outcome(None, "adjudication", "-499 cp")),
+    ],
+)
+def test_turn_limit_adjudicates_after_both_sides_made_max_turns_moves(score, outcome):
+    game = Judged(score)
+    result, _, black = run(["e4", "Nf3"], ["e5", "Nc6"], game=game, max_turns=2)
+    assert result.outcome == outcome and result.outcome.adjudicated
     assert len(result.turns) == 4
     assert "move 2 of 2 (1 left" in black.requests[1].prompt.user
+    assert [board.fen() for board in game.evaluated] == [result.state.fen()]
+
+
+class FailingEngine:
+    """Stands in for a Stockfish process that fails while analysing."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def analyse(self, board, limit):
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (
+            EngineTerminatedError("engine process died unexpectedly"),
+            "Stockfish failed to adjudicate the game: engine process died unexpectedly",
+        ),
+        # What SimpleEngine raises when a hung engine outlasts the limit's time cap.
+        (TimeoutError(), "Stockfish stopped responding while adjudicating"),
+    ],
+)
+def test_engine_failure_at_the_turn_limit_aborts_the_game_with_its_moves(error, message):
+    game = ChessGame()
+    game._engine = FailingEngine(error)
+    events = []
+    result, _, _ = run(["e4"], ["e5"], game=game, max_turns=1, events=events)
+    assert result.outcome is None
+    assert result.error == message
+    assert [t.move for t in result.turns] == ["e4", "e5"]
+    assert [move.uci() for move in result.state.move_stack] == ["e2e4", "e7e5"]
+    assert isinstance(events[-1], GameFinished) and events[-1].result is result
+
+
+def test_no_adjudication_before_the_turn_limit():
+    game = Judged(Cp(900))
+    result, _, _ = run(["e4", RESIGN], ["e5"], game=game, max_turns=2)
+    assert result.outcome == Outcome(Side.SECOND, "resignation")
+    assert not result.outcome.adjudicated and game.evaluated == []
+
+
+def test_game_ending_on_the_board_at_the_turn_limit_is_not_adjudicated():
+    game = Judged(Cp(900))
+    result, _, _ = run(["f3", "g4"], ["e5", "Qh4#"], game=game, max_turns=2)
+    assert result.outcome == Outcome(Side.SECOND, "checkmate")
+    assert game.evaluated == []
 
 
 def test_third_rejected_answer_loses():

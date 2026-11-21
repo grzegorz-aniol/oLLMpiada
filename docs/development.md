@@ -15,6 +15,12 @@ and the contribution workflow.
 uv sync            # create .venv and install the locked dependencies
 ```
 
+Chess competitions also need [Stockfish](https://stockfishchess.org/) (for example
+`brew install stockfish` or `apt install stockfish`) on `PATH`, or its path in
+`OLLMPIADA_STOCKFISH`; it adjudicates games at the turn limit (see
+[end of game](game-master/results.md#end-of-game)). Tests do not need it: the one test
+against the real engine is skipped without it.
+
 Then copy `.env.example` to `.env` and fill the tokens the configured providers
 need; variable names are owned by [configuration](configuration.md#environment).
 Models are served elsewhere (llama.cpp, a proxy, a hosted API, `basal-serve` for

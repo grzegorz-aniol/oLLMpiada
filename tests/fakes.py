@@ -1,7 +1,12 @@
-"""Scripted fake players: the only players game master and competition tests use."""
+"""Fakes for tests: scripted players, the only players game master and competition tests use,
+and chess with a fixed engine score, so no test needs Stockfish."""
 
 import asyncio
 
+import chess
+from chess.engine import Score
+
+from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TurnAnswer, TurnRequest, TurnResponse, Usage
 
 USAGE = Usage(input_tokens=100, output_tokens=10, reasoning_tokens=0)
@@ -38,3 +43,17 @@ class ScriptedPlayer:
 def unreadable(raw: str = "I think e4 is best") -> TurnResponse:
     """A reply that does not match the answer format."""
     return TurnResponse(raw, None, 1.0, USAGE, format_error="not a TurnAnswer")
+
+
+class Judged(ChessGame):
+    """Chess whose engine is replaced by prepared scores from White's view, one per
+    evaluated position."""
+
+    def __init__(self, *scores: Score) -> None:
+        super().__init__()
+        self.scores = list(scores)
+        self.evaluated: list[chess.Board] = []
+
+    def evaluate(self, state: chess.Board) -> Score:
+        self.evaluated.append(state)
+        return self.scores[len(self.evaluated) - 1]

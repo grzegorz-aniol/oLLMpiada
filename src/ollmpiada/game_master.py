@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ollmpiada.games.base import Game, IllegalMove, Outcome, Side
+from ollmpiada.games.base import AdjudicationError, Game, IllegalMove, Outcome, Side
 from ollmpiada.players.base import (
     PermanentError,
     Player,
@@ -183,7 +183,12 @@ async def play_game[S](
         publish(MoveMade(number, side, player.name, label, state, answer.offer_draw))
         result.outcome = game.outcome(state)
         if result.outcome is None and min(moves_made.values()) >= max_turns:
-            result.outcome = Outcome(None, "turn limit")
+            try:
+                # A worker thread keeps live timers and Ctrl+C responsive while the engine thinks.
+                result.outcome = await asyncio.to_thread(game.adjudicate, state)
+            except AdjudicationError as e:
+                result.error = str(e)
+                break
 
     result.state = state
     publish(GameFinished(result))

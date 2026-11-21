@@ -21,13 +21,17 @@ Status = Literal["running", "finished", "aborted", "stopped"]
 
 @dataclass
 class PlayerStats:
-    """Totals for one player (model id plus effort) over its counted games."""
+    """Totals for one player (model id plus effort) over its counted games. Each game counts
+    in one of `wins`, `losses`, `draws` (decided on the board) or their adjudicated twins."""
 
     name: str
     games: int = 0
     wins: int = 0
     losses: int = 0
     draws: int = 0
+    adjudicated_wins: int = 0
+    adjudicated_losses: int = 0
+    adjudicated_draws: int = 0
     moves: int = 0
     calls: int = 0
     thinking_s: float = 0.0
@@ -48,13 +52,22 @@ class PlayerStats:
 
     def add(self, result: GameResult) -> None:
         """Count one finished game."""
-        assert result.outcome is not None
+        outcome = result.outcome
+        assert outcome is not None
         side = Side.FIRST if result.players[0] == self.name else Side.SECOND
         self.games += 1
-        if result.outcome.winner is None:
-            self.draws += 1
-        elif result.outcome.winner is side:
-            self.wins += 1
+        if outcome.winner is None:
+            if outcome.adjudicated:
+                self.adjudicated_draws += 1
+            else:
+                self.draws += 1
+        elif outcome.winner is side:
+            if outcome.adjudicated:
+                self.adjudicated_wins += 1
+            else:
+                self.wins += 1
+        elif outcome.adjudicated:
+            self.adjudicated_losses += 1
         else:
             self.losses += 1
         for turn in result.turns:
@@ -92,16 +105,21 @@ class GameSummary:
     """`1-0`, `0-1`, `1/2-1/2`, or `aborted`."""
     reason: str
     moves: int
+    score: str | None = None
+    """What an adjudicated game was judged by (`Outcome.score`)."""
 
     @classmethod
     def of(cls, result: GameResult) -> GameSummary:
         moves = sum(turn.action == "move" for turn in result.turns)
-        if result.outcome is None:
+        outcome = result.outcome
+        if outcome is None:
             return cls(result.number, result.players, None, "aborted", result.error or "", moves)
-        winner = result.outcome.winner
-        score = {Side.FIRST: "1-0", Side.SECOND: "0-1", None: "1/2-1/2"}[winner]
+        winner = outcome.winner
+        scoreline = {Side.FIRST: "1-0", Side.SECOND: "0-1", None: "1/2-1/2"}[winner]
         name = None if winner is None else result.players[0 if winner is Side.FIRST else 1]
-        return cls(result.number, result.players, name, score, result.outcome.reason, moves)
+        return cls(
+            result.number, result.players, name, scoreline, outcome.reason, moves, outcome.score
+        )
 
 
 @dataclass

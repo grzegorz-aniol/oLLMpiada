@@ -1,14 +1,17 @@
 import re
+import shutil
 
 import chess
 import pytest
 from rich.console import Console
 
+from ollmpiada.config import load_settings
 from ollmpiada.games import GAMES
-from ollmpiada.games.base import IllegalMove, Outcome, PromptContext, Side
-from ollmpiada.games.chess_game import DARK_LAST, LIGHT_LAST
+from ollmpiada.games.base import GameSetupError, IllegalMove, Outcome, PromptContext, Side
+from ollmpiada.games.chess_game import ADJUDICATION_WIN_CP, DARK_LAST, LIGHT_LAST
 
 game = GAMES["chess"]
+STOCKFISH = load_settings().stockfish
 
 
 def play(*moves: str) -> chess.Board:
@@ -295,7 +298,8 @@ def test_record_is_pgn_with_players_result_and_reason():
 
 def test_record_of_resigned_and_unfinished_games():
     state = play("e4")
-    assert '[Result "1-0"]' in game.record(state, Outcome(Side.FIRST, "resignation"), ("a", "b"))
+    resigned = game.record(state, Outcome(Side.FIRST, "resignation"), ("a", "b"))
+    assert '[Result "1-0"]' in resigned and "Stockfish" not in resigned
     assert '[Result "*"]' in game.record(state, None, ("a", "b"))
 
 
@@ -336,10 +340,13 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     assert sections(prompt.system) == ["ROLE AND GOAL", "RULES"]
     assert "playing a game of chess as White" in prompt.system and "win" in prompt.system
     assert "at most 40 moves" in prompt.system
+    flat_system = " ".join(prompt.system.split())
+    assert f"ahead by at least {ADJUDICATION_WIN_CP // 100} pawns" in flat_system
+    assert "or with a forced mate, wins" in flat_system
     assert "FEN" not in prompt.system and "Nf3" not in prompt.system
     assert (
         "The position shows the halfmove clock for the 50-move rule and says when the current "
-        "position has occurred before." in " ".join(prompt.system.split())
+        "position has occurred before." in flat_system
     )
 
     assert sections(prompt.user) == ["POSITION", "LEGAL MOVES"]
@@ -356,3 +363,33 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     assert sections(retry.user) == ["POSITION", "LEGAL MOVES", "PREVIOUS ATTEMPT"]
     assert retry.user.rstrip().endswith("Answer again with a legal move.")
     assert "illegal move Ke2" in retry.user
+
+
+# --- adjudication at the turn limit (score mapping: test_game_master.py) ---
+
+
+@pytest.mark.skipif(shutil.which(STOCKFISH) is None, reason="Stockfish is not installed")
+def test_stockfish_adjudicates_a_queen_up_position_for_white():
+    settings = load_settings({"OLLMPIADA_STOCKFISH": STOCKFISH})
+    queen_up = chess.Board("4k3/8/8/8/8/8/3QK3/8 b - - 0 1")
+    with game.session(settings):
+        outcome = game.adjudicate(queen_up)
+    assert outcome.winner is Side.FIRST and outcome.adjudicated and outcome.score
+
+
+def test_session_names_the_setting_when_stockfish_does_not_start(tmp_path):
+    settings = load_settings({"OLLMPIADA_STOCKFISH": str(tmp_path / "no-stockfish")})
+    with pytest.raises(GameSetupError, match="OLLMPIADA_STOCKFISH"):
+        with game.session(settings):
+            pass
+
+
+def test_session_names_the_setting_when_the_program_never_speaks_uci(monkeypatch):
+    def hang(*args, **kwargs):
+        raise TimeoutError
+
+    monkeypatch.setattr(chess.engine.SimpleEngine, "popen_uci", hang)
+    settings = load_settings({"OLLMPIADA_STOCKFISH": "/bin/cat"})
+    with pytest.raises(GameSetupError, match="OLLMPIADA_STOCKFISH"):
+        with game.session(settings):
+            pass

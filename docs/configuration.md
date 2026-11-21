@@ -1,5 +1,5 @@
 ---
-related: ["README.md", "architecture.md", "game-master.md", "development.md"]
+related: ["README.md", "architecture.md", "game-master/README.md", "development.md"]
 ---
 
 # Configuration
@@ -59,7 +59,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | --- | --- | --- |
 | `openai-completions` | LLM, PydanticAI `OpenAIChatModel` (chat completions) | API root ending in `/v1`; requests go to `<url>/chat/completions` |
 | `anthropic-messages` | LLM, PydanticAI `AnthropicModel` (Messages API) | API root without `/v1`; requests go to `<url>/v1/messages` |
-| `systemone` | Decision model (SystemOne API, see [answer formats](game-master.md#answer-formats)) | The full endpoint URL |
+| `systemone` | Decision model (SystemOne API, see [answer formats](game-master/prompts.md#answer-formats)) | The full endpoint URL |
 
 - **Decision:** the provider's `api` picks the player adapter; models carry no
   type of their own. The names follow Pi's provider `api` values; a further API
@@ -91,7 +91,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
 | `max_tokens` | no | LLM models only: most output tokens per call, reasoning included, at least 1; sent as the `max_tokens` request field for both LLM APIs. Missing means ollmpiada sets no cap (for `anthropic-messages` PydanticAI then sends the model's maximum output) |
 | `reasoning_budget` | no | `openai-completions` models only: most reasoning tokens per call, at least 1 and below `max_tokens` when both are set; sent as the `reasoning_budget_tokens` request field. Missing means nothing is sent |
-| `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master.md#answer-formats) in the same query. Missing means no limit |
+| `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master/prompts.md#answer-formats) in the same query. Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
   from the model's `reasoning_efforts`, and written on the command line as
@@ -165,4 +165,5 @@ not read it. `.env.example` lists the variable names with empty values.
 | `OLLMPIADA_MODELS_CONFIG` | `config/models.json` | Path to the model config |
 | `OLLMPIADA_RUNS_DIR` | `.local/runs` | Where competition results are written |
 | `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call in seconds; a provider's `timeout_s` overrides it ([provider fields](#provider-fields)) |
+| `OLLMPIADA_STOCKFISH` | `stockfish` (looked up on `PATH`) | Path to the Stockfish binary that adjudicates chess games at the turn limit; required for chess ([end of game](game-master/results.md#end-of-game)) |
 | *names from `token_env`* | none | Provider tokens |

@@ -32,6 +32,8 @@ class Settings:
     models_config: Path
     runs_dir: Path
     request_timeout_s: float
+    stockfish: str
+    """The Stockfish binary: a path, or a name looked up on PATH."""
 
 
 def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
@@ -51,6 +53,7 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         models_config=Path(env.get("OLLMPIADA_MODELS_CONFIG") or "config/models.json"),
         runs_dir=Path(env.get("OLLMPIADA_RUNS_DIR") or ".local/runs"),
         request_timeout_s=request_timeout_s,
+        stockfish=env.get("OLLMPIADA_STOCKFISH") or "stockfish",
     )
 
 

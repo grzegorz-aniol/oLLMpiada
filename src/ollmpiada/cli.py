@@ -17,12 +17,12 @@ from rich.table import Column, Table
 from ollmpiada.competition import Competition, CompetitionEvent, CompetitionState, load_state
 from ollmpiada.config import ConfigError, Model, Settings, load_models, load_settings
 from ollmpiada.games import GAMES
-from ollmpiada.games.base import Game, IllegalMove
+from ollmpiada.games.base import Game, GameSetupError, IllegalMove
 from ollmpiada.players import PlayerError, create_player
 from ollmpiada.players.base import Player, TransportError, TurnRequest
 from ollmpiada.tui import LiveView, PlainOutput, results_table, stats_table, summary_lines
 
-DEFAULT_MAX_TURNS = 100
+DEFAULT_MAX_TURNS = 50
 REFRESH_S = 1.0
 
 
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         "--max-turns",
         type=_positive,
         default=DEFAULT_MAX_TURNS,
-        help=f"moves per side before a draw (default {DEFAULT_MAX_TURNS})",
+        help=f"moves per side before the game is adjudicated (default {DEFAULT_MAX_TURNS})",
     )
     run.add_argument("--mode", choices=["visual", "background"], default="visual")
     show = commands.add_parser("show", help="print the results of a saved competition")
@@ -154,6 +154,28 @@ def _run(
         return 2
 
     game = GAMES[args.game]
+    try:
+        with game.session(settings):
+            state, run_dir = _play_competition(console, game, players, args, settings)
+    except GameSetupError as e:
+        console.print(f"[red]Cannot start {game.name}:[/red] {escape(str(e))}", highlight=False)
+        return 2
+
+    for line in summary_lines(state):
+        console.print(line, highlight=False, soft_wrap=True)
+    console.print(f"Saved to {run_dir}", highlight=False, soft_wrap=True)
+    return 0 if state.status == "finished" else 1
+
+
+def _play_competition(
+    console: Console,
+    game: Game,
+    players: tuple[Player, Player],
+    args: argparse.Namespace,
+    settings: Settings,
+) -> tuple[CompetitionState, Path]:
+    """Play with the live view in a terminal, else with plain lines; returns the final state
+    and the run folder."""
     if console.is_terminal:
         view = LiveView(game, visual=args.mode == "visual")
         # Refreshing from the event loop (no refresh thread) never renders a board mid-update.
@@ -169,11 +191,7 @@ def _run(
         plain = PlainOutput(console)
         competition = _competition(game, players, args, settings, plain.handle)
         state = asyncio.run(_play(competition))
-
-    for line in summary_lines(state):
-        console.print(line, highlight=False, soft_wrap=True)
-    console.print(f"Saved to {competition.run_dir}", highlight=False, soft_wrap=True)
-    return 0 if state.status == "finished" else 1
+    return state, competition.run_dir
 
 
 def _competition(

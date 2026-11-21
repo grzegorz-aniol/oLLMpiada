@@ -39,6 +39,7 @@ experiment, not a production app.
 
 ```bash
 uv sync
+brew install stockfish          # or apt; adjudicates chess games at the turn limit
 cp .env.example .env            # fill tokens for providers that need them
 $EDITOR config/models.json      # providers and models available for competitions
 uv run ollmpiada models         # configured models and whether they are available
@@ -54,7 +55,7 @@ end-to-end check with real models is still to do.
 
 - [docs/README.md](docs/README.md) - documentation index.
 - [docs/product.md](docs/product.md) - what the app does and does not do.
-- [docs/game-master.md](docs/game-master.md) - refereeing, prompts and statistics.
+- [docs/game-master/README.md](docs/game-master/README.md) - refereeing, prompts and statistics.
 - [docs/configuration.md](docs/configuration.md) - `config/models.json` and `.env`.
 
 ## Name

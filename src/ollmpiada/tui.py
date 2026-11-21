@@ -39,13 +39,17 @@ def results_table(state: CompetitionState) -> Table:
     names = [Column(side, no_wrap=True) for side in state.side_names]
     table = Table("Game", *names, "Result", "Reason", "Moves", title="Results", **COMPACT)
     for r in state.results:
-        table.add_row(str(r.number), *r.players, r.result, r.reason, str(r.moves))
+        table.add_row(str(r.number), *r.players, r.result, _reason(r), str(r.moves))
     return table
 
 
+def _reason(summary: GameSummary) -> str:
+    return f"{summary.reason}: {summary.score}" if summary.score else summary.reason
+
+
 def stats_table(state: CompetitionState) -> Table:
-    numbers = ["Games", "W", "L", "D", "Think s", "s/move", "Tokens in/out/reas.", "Illegal",
-               "/game"]  # fmt: skip
+    numbers = ["Games", "W", "L", "D", "Adj. W/L/D", "Think s", "s/move", "Tokens in/out/reas.",
+               "Illegal", "/game"]  # fmt: skip
     table = Table(
         Column("Player", overflow="fold"),
         *(Column(header, no_wrap=True) for header in numbers),
@@ -59,6 +63,7 @@ def stats_table(state: CompetitionState) -> Table:
             str(s.wins),
             str(s.losses),
             str(s.draws),
+            f"{s.adjudicated_wins}/{s.adjudicated_losses}/{s.adjudicated_draws}",
             f"{s.thinking_s:.1f}",
             f"{s.thinking_s / s.moves:.1f}" if s.moves else "-",
             _tokens(s),
@@ -104,7 +109,10 @@ def summary_lines(state: CompetitionState) -> list[str]:
     if state.error:
         lines.append(f"Error: {state.error}")
     for s in state.stats.values():
-        lines.append(f"{s.name}: {s.wins} wins, {s.losses} losses, {s.draws} draws")
+        lines.append(
+            f"{s.name}: {s.wins} wins, {s.losses} losses, {s.draws} draws; adjudicated "
+            f"{s.adjudicated_wins} wins, {s.adjudicated_losses} losses, {s.adjudicated_draws} draws"
+        )
     counted = state.stats[state.players[0]].games
     if counted % 2:
         lines.append(
@@ -118,7 +126,7 @@ def game_line(summary: GameSummary, side_names: tuple[str, str]) -> str:
     first, second = summary.players
     return (
         f"game {summary.number}: {side_names[0]} {first} vs {side_names[1]} {second}: "
-        f"{summary.result} ({summary.reason}), {summary.moves} move"
+        f"{summary.result} ({_reason(summary)}), {summary.moves} move"
         + ("" if summary.moves == 1 else "s")
     )
 

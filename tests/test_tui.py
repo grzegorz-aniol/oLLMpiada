@@ -2,24 +2,33 @@ import asyncio
 import json
 import os
 import signal
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 import chess
 import pytest
+from chess.engine import Cp
 from rich.console import Console
 from rich.live import Live
 
 from ollmpiada.cli import main
-from ollmpiada.competition import Competition, CompetitionFinished, CompetitionProgress
+from ollmpiada.competition import (
+    Competition,
+    CompetitionFinished,
+    CompetitionProgress,
+    load_state,
+)
 from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade
+from ollmpiada.games import GAMES
 from ollmpiada.games.base import Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
-from ollmpiada.tui import LiveView, stats_table
-from tests.fakes import ScriptedPlayer
+from ollmpiada.tui import LiveView, results_table, stats_table
+from tests.fakes import Judged, ScriptedPlayer
 
 RESIGN = TurnAnswer(action="resign")
+REAL_SESSION = ChessGame.session
 # Game 1: the first player is White and gets mated; game 2: it plays Black and resigns.
 FIRST_SCRIPT = ["f3", "g4", RESIGN]
 SECOND_SCRIPT = ["e5", "Qh4#", "e4"]
@@ -27,7 +36,8 @@ SECOND_SCRIPT = ["e5", "Qh4#", "e4"]
 
 @pytest.fixture
 def scripted(monkeypatch, models_file):
-    """Make `run` use scripted players, keyed by the name given on the command line."""
+    """Make `run` use scripted players, keyed by the name given on the command line, and
+    start no engine."""
     scripts: dict[str, list] = {}
 
     def fake_create(name, models, *, timeout_s):
@@ -35,6 +45,7 @@ def scripted(monkeypatch, models_file):
         return ScriptedPlayer(name, scripts[name])
 
     monkeypatch.setattr("ollmpiada.cli.create_player", fake_create)
+    monkeypatch.setattr(ChessGame, "session", lambda self, settings: nullcontext())
     monkeypatch.setitem(Competition.__init__.__kwdefaults__, "backoff_s", (0, 0))
     return scripts
 
@@ -62,9 +73,41 @@ def test_run_prints_one_line_per_game_and_a_summary(scripted, models_file, capsy
         "game 2: White basal-mini vs Black local-llm@high: 1-0 (resignation), 1 move",
     ]
     assert "Competition finished: 2 of 2 games played." in lines
-    assert "basal-mini: 2 wins, 0 losses, 0 draws" in lines
+    assert "basal-mini: 2 wins, 0 losses, 0 draws; adjudicated 0 wins, 0 losses, 0 draws" in lines
     assert not any("Odd number" in line for line in lines)
     assert lines[-1] == f"Saved to {saved_runs(models_file)[0]}"
+
+
+def test_run_presents_adjudicated_results_apart(scripted, models_file, monkeypatch, capsys):
+    monkeypatch.setitem(GAMES, "chess", Judged(Cp(-650)))
+    scripted.update({"local-llm": ["e4"], "basal-mini": ["e5"]})
+    assert main(["run", "local-llm", "basal-mini", "--games", "1", "--max-turns", "1"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == (
+        "game 1: White local-llm vs Black basal-mini: 0-1 (adjudication: -650 cp), 2 moves"
+    )
+    assert "basal-mini: 0 wins, 0 losses, 0 draws; adjudicated 1 wins, 0 losses, 0 draws" in lines
+
+    state = load_state(saved_runs(models_file)[0])
+    assert "adjudication: -650 cp" in render(results_table(state))
+    stats = render(stats_table(state)).splitlines()
+    assert "Adj. W/L/D" in next(line for line in stats if "Games" in line)
+    basal = next(line for line in stats if line.split()[:1] == ["basal-mini"])
+    assert basal.split()[1:6] == ["1", "0", "0", "0", "1/0/0"]
+
+
+def test_run_stops_before_any_model_call_when_the_engine_cannot_start(
+    scripted, models_file, monkeypatch, capsys
+):
+    monkeypatch.setattr(ChessGame, "session", REAL_SESSION)
+    monkeypatch.setenv("OLLMPIADA_STOCKFISH", str(models_file.parent / "no-stockfish"))
+    played = []
+    monkeypatch.setattr(ScriptedPlayer, "play", lambda self, request: played.append(request))
+    scripted.update({"local-llm": [], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini"]) == 2
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Cannot start chess" in out and "OLLMPIADA_STOCKFISH" in out and "no-stockfish" in out
+    assert played == [] and saved_runs(models_file) == []
 
 
 @pytest.mark.parametrize(

@@ -1,13 +1,25 @@
 """Chess on the `chess` library."""
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import chess
+import chess.engine
 import chess.pgn
 from rich.text import Text
 
-from ollmpiada.games.base import Game, IllegalMove, Outcome, Side
+from ollmpiada.config import Settings
+from ollmpiada.games.base import (
+    ADJUDICATION,
+    AdjudicationError,
+    Game,
+    GameSetupError,
+    IllegalMove,
+    Outcome,
+    Side,
+)
 
 HERE = Path(__file__).parent
 REASONS = {
@@ -33,6 +45,14 @@ EDGE = re.compile(rf"^{EDGE_CLASS}+|{EDGE_CLASS}+$")
 MOVE_NUMBER = re.compile(r"^\d+\s*[.…][.…\s]*")
 EN_PASSANT_MARK = re.compile(r"(?<=[1-8+#])\s*\(?e\.?\s*p\.?$", re.IGNORECASE)
 SPLIT_SQUARES = re.compile(r"^([a-h][1-8])[\s-]+(?=[a-h][1-8])", re.IGNORECASE)
+# At the turn limit a side this far ahead, in centipawns, wins; the system prompt states it
+# in pawns. A forced mate counts as MATE_CP, beyond any material lead.
+ADJUDICATION_WIN_CP = 500
+MATE_CP = 100_000
+# Far deeper than telling a 5-pawn lead needs, and well under a second per position. The
+# time cap is a safety net: only a limit with a time makes SimpleEngine give up on a hung
+# engine, after that time plus its 10 s communication timeout.
+ADJUDICATION_LIMIT = chess.engine.Limit(depth=16, time=5)
 
 
 def _side(color: chess.Color) -> Side:
@@ -62,6 +82,9 @@ class ChessGame(Game[chess.Board]):
     system_template = (HERE / "chess_system_prompt.txt").read_text(encoding="utf-8")
     user_template = (HERE / "chess_user_prompt.txt").read_text(encoding="utf-8")
     record_extension = "pgn"
+
+    def __init__(self) -> None:
+        self._engine: chess.engine.SimpleEngine | None = None
 
     def new_state(self) -> chess.Board:
         return chess.Board()
@@ -136,6 +159,48 @@ class ChessGame(Game[chess.Board]):
             return Outcome(None, REASONS[chess.Termination.FIFTY_MOVES])
         return None
 
+    def adjudicate(self, state: chess.Board) -> Outcome:
+        """A win for a side ahead by `ADJUDICATION_WIN_CP` or with a forced mate, else a draw."""
+        score = self.evaluate(state)
+        lead = score.score(mate_score=MATE_CP)
+        winner = None
+        if lead >= ADJUDICATION_WIN_CP:
+            winner = Side.FIRST
+        elif lead <= -ADJUDICATION_WIN_CP:
+            winner = Side.SECOND
+        text = str(score) if score.is_mate() else f"{score} cp"
+        return Outcome(winner, ADJUDICATION, text)
+
+    def evaluate(self, state: chess.Board) -> chess.engine.Score:
+        """The engine's score of the position from White's view."""
+        if self._engine is None:
+            raise RuntimeError("chess adjudication needs the engine; play inside session()")
+        try:
+            return self._engine.analyse(state, ADJUDICATION_LIMIT)["score"].white()
+        except chess.engine.EngineError as e:  # includes the engine process dying
+            raise AdjudicationError(f"Stockfish failed to adjudicate the game: {e}") from e
+        except TimeoutError as e:
+            raise AdjudicationError("Stockfish stopped responding while adjudicating") from e
+
+    @contextmanager
+    def session(self, settings: Settings) -> Iterator[None]:
+        try:
+            # Its own process group keeps Ctrl+C, which stops the competition, off the engine.
+            engine = chess.engine.SimpleEngine.popen_uci(settings.stockfish, setpgrp=True)
+        # TimeoutError: the program started but never finished the UCI handshake.
+        except (OSError, chess.engine.EngineError, TimeoutError) as e:
+            raise GameSetupError(
+                f"chess needs Stockfish to adjudicate games at the turn limit, and "
+                f"{settings.stockfish!r} did not start ({e}). Install Stockfish or set "
+                "OLLMPIADA_STOCKFISH to its path."
+            ) from e
+        self._engine = engine
+        try:
+            yield
+        finally:
+            self._engine = None
+            engine.close()
+
     def describe(self, state: chess.Board) -> str:
         rows = [
             f"{rank + 1} | "
@@ -207,4 +272,6 @@ class ChessGame(Game[chess.Board]):
                 outcome.winner
             ]
             game.headers["Termination"] = outcome.reason
+            if outcome.score is not None:
+                game.end().comment = f"Stockfish: {outcome.score}"
         return str(game)

@@ -93,7 +93,7 @@ def test_probe_prints_parsed_answer_time_and_tokens(probe_with, capsys):
     assert "legal (Nf3)" in out and "1.00 s" in out and "in 100, out 10" in out
     request = player.requests[0]
     assert len(request.legal_moves) == 20 and not request.draw_offered
-    assert "as White" in request.prompt.system and "move 1 of 100" in request.prompt.user
+    assert "as White" in request.prompt.system and "move 1 of 50" in request.prompt.user
 
 
 def test_probe_reports_an_illegal_move(probe_with, capsys):

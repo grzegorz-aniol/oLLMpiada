@@ -1,5 +1,5 @@
 ---
-related: ["README.md", "product.md", "game-master.md", "configuration.md"]
+related: ["README.md", "product.md", "game-master/README.md", "configuration.md"]
 ---
 
 # Architecture
@@ -41,14 +41,15 @@ models. Contract: [configuration](configuration.md).
 ### Games
 
 One module per game implementing the game interface owned by
-[game master](game-master.md#game-abstraction), plus its prompt templates
+[game master](game-master/README.md#game-abstraction), plus its prompt templates
 (system and user part).
 Games are registered by name in `games/__init__.py`; `--game` picks one.
 
-A game module is self-contained: rules, prompt, terminal board, side names and
-game record all live in it. The rest of the app reaches a game only through the
-interface and the registry; what adding a game may touch is ruled in
-[game abstraction](game-master.md#game-abstraction).
+A game module is self-contained: rules, prompt, terminal board, side names, game
+record and turn-limit adjudication (for chess through Stockfish) all live in it.
+The rest of the app reaches a game only through the interface and the registry;
+what adding a game may touch is ruled in
+[game abstraction](game-master/README.md#game-abstraction).
 
 ### Players
 
@@ -60,7 +61,7 @@ or touch game state; that is the game master's job.
 ### Game master
 
 Runs one game: turn loop, validation, retries, end of game. Contract:
-[game master](game-master.md).
+[game master](game-master/README.md).
 
 ### Competition runner
 
@@ -91,11 +92,16 @@ The files are rewritten after every game so a crash loses at most the game in
 progress:
 
 - `competition.json` - settings (game, players, games, max turns), the
-  `CompetitionState` fields, and `prompt_version`, defined in
-  [prompts](game-master.md#prompts).
-- `game-NNN.<ext>` - the game's record (`.pgn` for chess), written for aborted
-  games too.
-- `game-NNN.json` - result, reason, side names and every turn with its attempts
+  `CompetitionState` fields (per-player `stats` with the adjudicated counters from
+  [statistics](game-master/results.md#statistics)), and `prompt_version`, defined in
+  [prompts](game-master/prompts.md#prompts).
+- `game-NNN.<ext>` - the game's record, written for aborted games too. For chess
+  it is PGN with the result, a `Termination` header holding the reason, and for
+  an adjudicated game the engine score as a comment after the last move
+  (`1. e4 e5 { Stockfish: #-2 } 0-1`).
+- `game-NNN.json` - result, reason, `score` (the evaluation an
+  [adjudicated](game-master/results.md#end-of-game) game was judged by, such as
+  `"+612 cp"`; `null` otherwise), side names and every turn with its attempts
   (raw answer, time, tokens, rejection reason).
 
 `ollmpiada show` reads `competition.json` back with `load_state`.
@@ -127,27 +133,33 @@ lines, so the board never moves or gets pushed off.
 The game statistics cover the current game. One line shows when it started (wall
 clock), how long it has run and the number of moves completed. Under it, a table
 has one row per player in this game's side order, which swaps from game to game
-(see [sides alternate](game-master.md#turn-loop)): a `▶` marker on the player who
+(see [sides alternate](game-master/turns.md#turn-loop)): a `▶` marker on the player who
 is thinking (the side to move), side and player, `Now` (how long the current turn
 has run, empty for the other player), `Legal` (the number of legal moves of the running turn,
 computed from the board, empty for the other player), `Total` (the player's turn times in this game, the running turn
 included, like a chess clock), then the requests (counted as defined in
-[game master](game-master.md#turn-loop)) and the input, output and reasoning tokens. A turn's time
+[game master](game-master/turns.md#turn-loop)) and the input, output and reasoning tokens. A turn's time
 covers the whole turn, retries included, and restarts with each move. Token
 counts not reported show as `–`, never as zero, and as `≥ n` when only some
 answers reported them. When the game ends or the competition stops, the timers
 freeze, the marker, `Now` and `Legal` disappear, and the last turn stays in its player's
 `Total`.
 
-Defaults: `--games 2`, `--max-turns 100` (moves per side), `--mode visual`. The
+Defaults: `--games 2`, `--max-turns 50` (moves per side), `--mode visual`. The
 two players must have different names, because statistics are kept per name; to
-let a model play itself, give the two sides different efforts. `tui.py` holds the
+let a model play itself, give the two sides different efforts. How `run` starts
+the engine that adjudicates chess is owned by
+[end of game](game-master/results.md#end-of-game).
+An adjudicated game shows its score after the reason, in the results table and
+in plain lines (`0-1 (adjudication: -650 cp)`); the statistics table has an
+`Adj. W/L/D` column and the summary lists adjudicated wins, losses and draws
+apart (see [statistics](game-master/results.md#statistics)). `tui.py` holds the
 renderers: `LiveView` (subscribes to runner events; the CLI refreshes Rich `Live`
 after each event and once a second from the event loop, with no refresh thread,
 so timers tick while a model thinks but a render never interleaves with an event
 update; timers are computed at render time from the view's `clock`, which tests
 replace; log warnings, such as a decision player asking
-[per piece](game-master.md#answer-formats), go through the same console so they
+[per piece](game-master/prompts.md#answer-formats), go through the same console so they
 print above the view),
 `results_table`, `stats_table`, `summary_lines` (status, totals
 and the odd-game imbalance) and `PlainOutput`. `show` reuses the same tables.

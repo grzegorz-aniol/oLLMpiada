@@ -18,6 +18,7 @@ def test_settings_defaults():
     assert settings.models_config == Path("config/models.json")
     assert settings.runs_dir == Path(".local/runs")
     assert settings.request_timeout_s == 120
+    assert settings.stockfish == "stockfish"
 
 
 def test_settings_from_environment():
@@ -26,9 +27,10 @@ def test_settings_from_environment():
             "OLLMPIADA_MODELS_CONFIG": "x.json",
             "OLLMPIADA_RUNS_DIR": "out",
             "OLLMPIADA_REQUEST_TIMEOUT_S": "7.5",
+            "OLLMPIADA_STOCKFISH": "/opt/sf/stockfish",
         }
     )
-    assert settings == type(settings)(Path("x.json"), Path("out"), 7.5)
+    assert settings == type(settings)(Path("x.json"), Path("out"), 7.5, "/opt/sf/stockfish")
 
 
 @pytest.mark.parametrize("value", ["abc", "0", "-5"])

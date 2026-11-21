@@ -10,8 +10,9 @@ Standard chess rules apply: checkmate the opposing king to win.
 
 A referee enforces these rules:
 - Turn limit: each side makes at most $max_turns moves. When both sides have made
-  $max_turns moves, the game ends in a draw, so a winning position must be converted
-  before the limit.
+  $max_turns moves, a chess engine judges the final position: a side ahead by at
+  least 5 pawns, or with a forced mate, wins; anything else is a draw. Convert a
+  winning position before the limit, or build that lead by then.
 - Illegal answers: an answer with a missing or illegal move is rejected and you must
   answer again. Your third rejected answer in the same turn loses the game.
 - Automatic draws: stalemate, insufficient material, threefold repetition and the
