@@ -91,14 +91,19 @@ def test_create_player_uses_provider_timeout_over_default(
 # --- LLM player ---
 
 
-def function_player(reply, settings=None) -> tuple[LLMPlayer, list[AgentInfo]]:
+def function_player(reply, settings=None, output_mode="tool") -> tuple[LLMPlayer, list[AgentInfo]]:
     seen: list[AgentInfo] = []
 
     def respond(messages, info: AgentInfo) -> ModelResponse:
         seen.append(info)
         return reply(messages, info)
 
-    return LLMPlayer("p", FunctionModel(respond), timeout_s=7, settings=settings), seen
+    model = FunctionModel(respond)
+    return LLMPlayer("p", model, timeout_s=7, settings=settings, output_mode=output_mode), seen
+
+
+def text_reply(text: str):
+    return lambda messages, info: ModelResponse(parts=[TextPart(text)])
 
 
 def tool_reply(args: dict, usage=RequestUsage()):
@@ -159,6 +164,28 @@ def test_llm_format_error_is_returned_once_not_retried(reply, raw):
     assert response.answer is None
     assert response.format_error and "errors.pydantic.dev" not in response.format_error
     assert response.raw == raw
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"action": "move", "move": "Nf3"}', '```json\n{"action": "move", "move": "Nf3"}\n```'],
+    ids=["plain-json", "json-fence"],
+)
+def test_llm_prompted_answer_is_parsed_from_the_reply_text(text):
+    player, seen = function_player(text_reply(text), output_mode="prompted")
+    response = play(player)
+    assert response.answer == TurnAnswer(action="move", move="Nf3")
+    assert response.raw == text
+    assert seen[0].output_tools == []
+
+
+@pytest.mark.parametrize("text", ["action: move\nmove: Nf3", '{"action": "castle"}'])
+def test_llm_prompted_invalid_answer_is_a_format_error_not_retried(text):
+    player, seen = function_player(text_reply(text), output_mode="prompted")
+    response = play(player)
+    assert response.answer is None and response.format_error
+    assert response.raw == text
     assert len(seen) == 1
 
 
@@ -281,6 +308,43 @@ def test_llm_reasoning_budget_goes_out_as_llama_cpp_field(models, budget):
     assert bodies[0]["reasoning_effort"] == "high"
 
 
+def text_completion(content: str) -> dict:
+    message = {"role": "assistant", "content": content}
+    choice = {"index": 0, "finish_reason": "stop", "message": message}
+    return {**CHAT_COMPLETION, "choices": [choice]}
+
+
+def with_output_mode(model, mode):
+    return dataclasses.replace(model, spec=model.spec.model_copy(update={"output_mode": mode}))
+
+
+@pytest.mark.parametrize(
+    ("mode", "tool_choice", "response_format"),
+    [("tool", "required", None), ("native", None, "json_schema"), ("prompted", None, None)],
+)
+def test_llm_output_mode_decides_how_openai_asks_for_the_answer(
+    models, mode, tool_choice, response_format
+):
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "tools" in body:
+            return httpx2.Response(200, json=CHAT_COMPLETION)
+        return httpx2.Response(200, json=text_completion('{"action": "move", "move": "e4"}'))
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    model = with_output_mode(models["local-llm"], mode)
+    player = create_llm_player("p", model, effort=None, timeout_s=5, http_client=client)
+    assert play(player).answer == TurnAnswer(action="move", move="e4")
+    body = bodies[0]
+    assert ("tools" in body) == (mode == "tool")
+    assert body.get("tool_choice") == tool_choice
+    assert body.get("response_format", {}).get("type") == response_format
+    assert body["messages"][0]["content"].startswith(SYSTEM_SENT)
+
+
 @pytest.mark.parametrize(
     ("usage", "expected"),
     [
@@ -332,12 +396,12 @@ ANTHROPIC_MESSAGE = {
 
 
 def anthropic_reply(request: httpx2.Request) -> httpx2.Response:
-    """Answer like the Messages API, as server-sent events: JSON text for native output,
-    else the output tool. PydanticAI streams because a Claude model's default
-    `max_tokens` is its maximum output, too long to wait for unstreamed."""
+    """Answer like the Messages API, as server-sent events: the output tool when one is
+    offered, else JSON text (native or prompted output). PydanticAI streams because a Claude
+    model's default `max_tokens` is its maximum output, too long to wait for unstreamed."""
     body = json.loads(request.content)
     answer = '{"action": "resign"}'
-    if "format" in body.get("output_config", {}):
+    if "tools" not in body:
         block, delta = {"type": "text", "text": ""}, {"type": "text_delta", "text": answer}
     else:
         block = {"type": "tool_use", "id": "t1", "name": "final_result", "input": {}}
@@ -397,6 +461,24 @@ def test_llm_over_anthropic_messages_http(
     ]
     assert body.get("thinking") == thinking
     assert body.get("output_config", {}).get("effort") == output_effort
+
+
+@pytest.mark.parametrize(("mode", "output_format"), [("native", "json_schema"), ("prompted", None)])
+def test_llm_output_mode_over_anthropic_messages(models, mode, output_format):
+    bodies = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return anthropic_reply(request)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    model = with_output_mode(models["claude"], mode)
+    player = create_llm_player("c", model, effort="none", timeout_s=5, http_client=client)
+    assert play(player).answer == TurnAnswer(action="resign")
+    body = bodies[0]
+    assert "tools" not in body
+    assert body.get("output_config", {}).get("format", {}).get("type") == output_format
+    assert body["system"][0]["text"].startswith(SYSTEM_SENT)
 
 
 def test_llm_max_tokens_caps_anthropic_output(models):

@@ -7,7 +7,7 @@ import anthropic
 import httpx2
 import openai
 import pydantic_ai
-from pydantic_ai import Agent, capture_run_messages
+from pydantic_ai import Agent, NativeOutput, PromptedOutput, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models import Model as AIModel
@@ -18,7 +18,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from ollmpiada.config import Effort, Model
+from ollmpiada.config import Effort, Model, OutputMode
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
 
 # The first-run banner would print into the terminal UI.
@@ -33,10 +33,24 @@ exactly as listed under LEGAL MOVES, required when action is move); offer_draw
 (true to offer a draw together with your move, otherwise false).
 """
 
+# How PydanticAI asks for the answer: an output tool, the server's JSON schema mode, or the
+# schema in the instructions with the reply parsed from text (configuration docs).
+_OUTPUT_TYPES = {
+    "tool": TurnAnswer,
+    "native": NativeOutput(TurnAnswer),
+    "prompted": PromptedOutput(TurnAnswer),
+}
+
 
 class LLMPlayer:
     def __init__(
-        self, name: str, model: AIModel, *, timeout_s: float, settings: ModelSettings | None = None
+        self,
+        name: str,
+        model: AIModel,
+        *,
+        timeout_s: float,
+        settings: ModelSettings | None = None,
+        output_mode: OutputMode = "tool",
     ) -> None:
         # The game master owns every retry, so the provider client makes one attempt.
         # `request_timeout` only shortens a call; `timeout` replaces the SDK client's own
@@ -47,7 +61,10 @@ class LLMPlayer:
         self.name = name
         # Output retries are off so every invalid answer reaches the game master to be counted.
         self._agent = Agent(
-            model, output_type=TurnAnswer, retries={"output": 0}, model_settings=settings
+            model,
+            output_type=_OUTPUT_TYPES[output_mode],
+            retries={"output": 0},
+            model_settings=settings,
         )
 
     async def play(self, request: TurnRequest) -> TurnResponse:
@@ -102,6 +119,10 @@ def create_llm_player(
         # A partial profile is merged over the provider's default. The cap goes out as
         # `max_tokens`, the field local servers and OpenRouter read (see configuration docs).
         profile = OpenAIModelProfile(openai_chat_supports_max_completion_tokens=False)
+        if model.spec.output_mode == "prompted":
+            # Prompted output would send `response_format: json_object`, which some local
+            # servers cannot turn into a grammar; without it nothing is constrained server-side.
+            profile["supports_json_object_output"] = False
         ai_model = OpenAIChatModel(model.spec.model, provider=provider, profile=profile)
         if effort:
             settings["openai_reasoning_effort"] = effort
@@ -114,7 +135,9 @@ def create_llm_player(
         # Without a token no Authorization header is sent (both SDKs send the key as a
         # bearer token): a proxy may handle security itself.
         settings["extra_headers"]["Authorization"] = omit
-    return LLMPlayer(name, ai_model, timeout_s=timeout_s, settings=settings)
+    return LLMPlayer(
+        name, ai_model, timeout_s=timeout_s, settings=settings, output_mode=model.spec.output_mode
+    )
 
 
 def _describe(error: UnexpectedModelBehavior) -> str:

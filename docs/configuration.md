@@ -91,6 +91,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `reasoning_efforts` | no | Reasoning efforts the model accepts; empty or missing means reasoning cannot be set |
 | `max_tokens` | no | LLM models only: most output tokens per call, reasoning included, at least 1; sent as the `max_tokens` request field for both LLM APIs. Missing means ollmpiada sets no cap (for `anthropic-messages` PydanticAI then sends the model's maximum output) |
 | `reasoning_budget` | no | `openai-completions` models only: most reasoning tokens per call, at least 1 and below `max_tokens` when both are set; sent as the `reasoning_budget_tokens` request field. Missing means nothing is sent |
+| `output_mode` | no | LLM models only: how the answer is asked for. `tool` offers an output tool the model must call; `native` asks for the API's JSON-schema output (`response_format` for `openai-completions`, `output_config.format` for `anthropic-messages`); `prompted` puts the JSON schema into the instructions and parses the reply text, with no tool and no `response_format` sent. Missing means `tool` |
 | `max_options` | no | `systemone` models only: most options the server accepts in one question, at least 2; longer move lists are [asked per piece](game-master/prompts.md#answer-formats) in the same query. Missing means no limit |
 
 - **Decision:** reasoning effort is chosen per player when a competition starts,
@@ -106,9 +107,9 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   PydanticAI's unified `thinking` setting: `none` turns thinking off, other levels
   are mapped per Claude model (adaptive thinking with that effort on current
   models, a token budget on older ones). `systemone` models take no effort, and
-  the loader rejects one that lists any, or `max_tokens`; likewise it rejects
-  `max_options` on a model of any other `api`, and `reasoning_budget` on a model
-  of any `api` but `openai-completions`.
+  the loader rejects one that lists any, `max_tokens` or `output_mode`; likewise
+  it rejects `max_options` on a model of any other `api`, and `reasoning_budget`
+  on a model of any `api` but `openai-completions`.
 - **Sensitive:** `max_tokens` counts reasoning tokens too, so a low cap on a
   reasoning model can cut the answer off before it is written.
 - **Decision:** for `openai-completions` the cap is sent as the `max_tokens`
@@ -144,12 +145,32 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 - **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
   know how to send thinking, so a proxy route prefix is stripped for that lookup
   (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
-  on, Claude cannot be forced to call the output tool, so PydanticAI asks for
-  JSON-schema output instead; a bare id with no effort thinks by default.
+  on, Claude cannot be forced to call the output tool, so in `tool` mode
+  PydanticAI asks for JSON-schema output instead; a bare id with no effort thinks
+  by default.
+- **Decision:** `output_mode` is a per-model fallback for servers whose structured
+  output fails, and `tool` stays the default for every model. `prompted` is the
+  fallback for local servers, because it asks the server to enforce nothing. For
+  `openai-completions` it also turns off the OpenAI model profile's
+  `supports_json_object_output`: PydanticAI's prompted output otherwise sends
+  `response_format: {"type": "json_object"}`, which hits the same server failure
+  as the other modes. The Anthropic Messages API has no such JSON mode, so
+  `anthropic-messages` needs no change. Whether `prompted` should be the default
+  for local models is open: it changes how each model is asked, which may matter
+  for fairness between competitors.
+- **Sensitive:** llama.cpp `llama-server` (build 12359, checked live 2026-11-21)
+  cannot initialise any grammar it generates itself for some GGUF models
+  (Bielik 4.5B v3.0 Instruct): `tool_choice: required`, `response_format`
+  `json_object` and `json_schema` all fail with HTTP 400 `Failed to initialize
+  samplers`, which ollmpiada counts as a transport error. With the model's own
+  chat template the tool request is accepted but left unconstrained, so in `tool`
+  mode the model answers in free text and every turn is a format error. Only
+  `prompted` gave legal answers there (32 of 32 calls, against none for the other
+  modes).
 
 The loader validates the file with Pydantic at startup: unique ids, existing
-provider names, known `api` and effort values, `max_options` of at least 2,
-`max_tokens` of at least 1, a `reasoning_budget` of at least 1 and below
+provider names, known `api`, effort and `output_mode` values, `max_options` of at
+least 2, `max_tokens` of at least 1, a `reasoning_budget` of at least 1 and below
 `max_tokens`, a positive `timeout_s`, `headers` with non-empty names, string
 values and no `Authorization`. An invalid file stops the app with a message
 naming the bad entry.

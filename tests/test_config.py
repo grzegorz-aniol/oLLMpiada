@@ -76,6 +76,13 @@ def test_openai_model_takes_reasoning_budget_below_max_tokens(tmp_path, models_d
     assert models["claude"].spec.reasoning_budget is None
 
 
+def test_llm_models_take_output_mode_defaulting_to_tool(tmp_path, models_data):
+    models_data["models"][0]["output_mode"] = "prompted"
+    models_data["models"][2]["output_mode"] = "native"
+    models = load_models(write(tmp_path, models_data), {})
+    assert [m.spec.output_mode for m in models.values()] == ["prompted", "tool", "native", "tool"]
+
+
 def test_systemone_model_takes_max_options(tmp_path, models_data):
     models_data["models"][3]["max_options"] = 26
     models = load_models(write(tmp_path, models_data), {})
@@ -111,6 +118,8 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         (lambda d: d["models"][3].update(max_options=1), r"max_options\s+Input should be greater"),
         (lambda d: d["models"][3].update(max_tokens=100), "it takes no max_tokens"),
         (lambda d: d["models"][0].update(max_tokens=0), r"max_tokens\s+Input should be greater"),
+        (lambda d: d["models"][3].update(output_mode="tool"), "it takes no output_mode"),
+        (lambda d: d["models"][0].update(output_mode="json"), r"output_mode\s+Input should be"),
         (lambda d: d["providers"][0].update(timeout_s=0), r"timeout_s\s+Input should be greater"),
         (lambda d: d["models"][2].update(reasoning_budget=2048), "it takes no reasoning_budget"),
         (lambda d: d["models"][3].update(reasoning_budget=2048), "it takes no reasoning_budget"),
@@ -144,6 +153,8 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "max-options-below-two",
         "systemone-with-max-tokens",
         "max-tokens-below-one",
+        "systemone-with-output-mode",
+        "bad-output-mode",
         "timeout-not-positive",
         "anthropic-with-reasoning-budget",
         "systemone-with-reasoning-budget",

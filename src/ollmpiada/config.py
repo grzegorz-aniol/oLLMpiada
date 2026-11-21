@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 Effort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 Api = Literal["openai-completions", "anthropic-messages", "systemone"]
+OutputMode = Literal["tool", "native", "prompted"]
 
 
 class ConfigError(Exception):
@@ -86,6 +87,7 @@ class ModelSpec(_Strict):
     max_options: Annotated[int, Field(ge=2)] | None = None
     max_tokens: Annotated[int, Field(ge=1)] | None = None
     reasoning_budget: Annotated[int, Field(ge=1)] | None = None
+    output_mode: OutputMode = "tool"
 
 
 class ModelsFile(_Strict):
@@ -107,6 +109,8 @@ class ModelsFile(_Strict):
                 raise ValueError(f"model {m.id!r} is a systemone model; it takes no efforts")
             if apis[m.provider] == "systemone" and m.max_tokens is not None:
                 raise ValueError(f"model {m.id!r} is a systemone model; it takes no max_tokens")
+            if apis[m.provider] == "systemone" and "output_mode" in m.model_fields_set:
+                raise ValueError(f"model {m.id!r} is a systemone model; it takes no output_mode")
             if apis[m.provider] != "systemone" and m.max_options is not None:
                 raise ValueError(
                     f"model {m.id!r} is not a systemone model; it takes no max_options"

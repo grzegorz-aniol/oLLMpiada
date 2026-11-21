@@ -101,9 +101,15 @@ Reasoning tokens are known when the model reports them (OpenAI
 - **Sensitive:** PydanticAI retries invalid structured output on its own. Set its
   output retries to zero and let the game master retry, so every rejection is
   counted, timed and visible.
-- **Sensitive:** local servers differ in tool-calling support. If tool-based output
-  fails for a model, switch that model to PydanticAI `NativeOutput` or
-  `PromptedOutput`; this may become a per-model config field.
+- **Sensitive:** local servers differ in structured-output support. A model's
+  [`output_mode`](../configuration.md#model-fields) picks the agent's output type:
+  `TurnAnswer` itself for `tool` (an output tool, the default),
+  `NativeOutput(TurnAnswer)` for `native` (the API's JSON-schema output) or
+  `PromptedOutput(TurnAnswer)` for `prompted` (PydanticAI adds the JSON schema to
+  the instructions after the ANSWER FORMAT section and parses the reply text,
+  plain JSON or in a code fence). The ANSWER FORMAT section is sent and output
+  retries stay at zero in every mode. The prompt version does not cover the
+  output mode, which is model config like `max_tokens`.
 
 **Decision players** call the SystemOne API: `POST {model, state, questions}`,
 where `state` is the shared prompt text, system part then user part, and every
