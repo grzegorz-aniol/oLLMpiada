@@ -119,7 +119,9 @@ mode the game's board with the move list above it and the game statistics below
 it, then the results table and the statistics table per player. The move list is
 one wrapped line numbered by move pair,
 `(1) e4 e5 (2) Nf3 Nc6`, with rejected attempts inline in red as
-`[✗ <attempt>: <reason>]`. It keeps a fixed height and shows its most recent
+`[✗ <side> <attempt>: <reason>]`, where `<side>` is the game's name for the
+side whose answer was rejected (`[✗ Black 1: 'Nxf7' is not a legal move in this
+position]`). It keeps a fixed height and shows its most recent
 lines, so the board never moves or gets pushed off.
 
 The game statistics cover the current game. One line shows when it started (wall

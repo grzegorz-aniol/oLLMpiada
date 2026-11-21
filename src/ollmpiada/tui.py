@@ -174,7 +174,8 @@ class LiveView:
             case AnswerRejected(side=side, reason=reason, attempt=attempt):
                 reason = " ".join(reason.split())
                 reason = reason if len(reason) <= REASON_SHOWN else reason[:REASON_SHOWN] + "..."
-                self._note(side, f"[✗ {attempt}: {reason}]", style="red")
+                entry = f"[✗ {self.game.side_name(side)} {attempt}: {reason}]"
+                self._note(side, entry, style="red")
             case GameFinished():
                 self.current = None
                 self._end_game()

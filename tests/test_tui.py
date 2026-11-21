@@ -210,13 +210,14 @@ def play_into(view, tmp_path, first, second, games=2):
 def test_live_view_visual_mode_shows_board_moves_and_rejections(tmp_path):
     view = LiveView(ChessGame(), visual=True)
     assert render(view).strip() == "Starting..."
-    play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Qh4#"], games=1)
+    play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Nxf7", "Qh4#"], games=1)
     text = render(view)
     assert "Games 1 of 1 | finished" in text
     lines = text.splitlines()
     moves = next(i for i, line in enumerate(lines) if "(1) f3" in line)
     assert lines[moves].strip() == (
-        "(1) f3 e5 (2) [✗ 1: 'Ke3' is not a legal move in this position] g4 Qh4#"
+        "(1) f3 e5 (2) [✗ White 1: 'Ke3' is not a legal move in this position] g4 "
+        "[✗ Black 1: 'Nxf7' is not a legal move in this position] Qh4#"
     )
     assert lines[moves + 1].startswith("8 ") and "♛" in text and "a  b  c" in text
     assert "White" in text and "Black" in text and "checkmate" in text and "Statistics" in text
