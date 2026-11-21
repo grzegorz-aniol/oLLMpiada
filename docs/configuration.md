@@ -23,43 +23,34 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 ```json
 {
   "providers": [
-    {"name": "local-llama", "url": "http://127.0.0.1:1234/v1",
-     "api": "openai-completions", "timeout_s": 600},
-    {"name": "bifrost", "url": "http://127.0.0.1:8080/v1",
+    {"name": "bifrost", "url": "http://localhost:8080/v1",
      "api": "openai-completions", "timeout_s": 300,
      "headers": {"x-bf-passthrough-extra-params": "true"}},
-    {"name": "openrouter", "url": "https://openrouter.ai/api/v1",
-     "api": "openai-completions", "token_env": "OPENROUTER_API_KEY"},
     {"name": "anthropic", "url": "https://api.anthropic.com",
      "api": "anthropic-messages", "token_env": "ANTHROPIC_API_KEY"},
-    {"name": "basal", "url": "http://127.0.0.1:8000/v1/systemone", "api": "systemone"}
+    {"name": "decision-server", "url": "http://localhost:8000/v1/systemone",
+     "api": "systemone"}
   ],
   "models": [
-    {"id": "qwen3-30b-local", "provider": "local-llama", "model": "qwen3-30b-a3b",
+    {"id": "qwen3-8b", "provider": "bifrost", "model": "llama.cpp/Qwen3-8B-GGUF",
      "reasoning_efforts": ["none", "low", "medium", "high"],
-     "max_tokens": 8192, "reasoning_budget": 4096},
-    {"id": "qwen-3.5-4B", "provider": "bifrost",
-     "model": "llama.cpp/unsloth/Qwen3.5-4B-GGUF:Q8_0",
-     "reasoning_efforts": ["none", "low", "medium", "high"],
-     "max_tokens": 8192, "reasoning_budget": 512},
-    {"id": "bielik-4.5b", "provider": "bifrost",
-     "model": "llama.cpp/speakleash/Bielik-4.5B-v3.0-Instruct-GGUF:Q8_0",
+     "max_tokens": 8192, "reasoning_budget": 1024},
+    {"id": "instruct-7b", "provider": "bifrost",
+     "model": "llama.cpp/Example-Instruct-7B-GGUF",
      "max_tokens": 1024, "output_mode": "prompted"},
-    {"id": "gpt-oss-120b", "provider": "openrouter", "model": "openai/gpt-oss-120b",
-     "reasoning_efforts": ["low", "medium", "high"], "max_tokens": 16384},
-    {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
+    {"id": "claude-haiku", "provider": "anthropic", "model": "claude-haiku-5-5",
      "reasoning_efforts": ["none", "low", "medium", "high"]},
-    {"id": "basal-mini", "provider": "basal", "model": "Remek/basal-1.5-mini-GGUF",
-     "max_options": 26}
+    {"id": "decision-model", "provider": "decision-server",
+     "model": "example/decision-model-GGUF", "max_options": 20}
   ]
 }
 ```
 
-`qwen-3.5-4B` goes through a Bifrost proxy, so its provider sends the
-passthrough header that lets `reasoning_budget` reach llama.cpp; `bielik-4.5b`
-uses `prompted` output because llama.cpp cannot build a grammar for it (both in
+`qwen3-8b` goes through Bifrost, so its provider sends the passthrough header
+that lets `reasoning_budget` reach llama.cpp; `instruct-7b` uses `prompted`
+output, the fallback for a model whose grammar llama.cpp cannot build (both in
 [model fields](#model-fields)). The [README](../README.md#configuring-models)
-walks through a real config and why each option is there.
+walks through the same example and why each option is there.
 
 ### Provider fields
 
@@ -115,7 +106,7 @@ walks through a real config and why each option is there.
   from the model's `reasoning_efforts`, and written on the command line as
   `<id>@<effort>`. A bare `<id>` sends no effort, so the provider's default
   applies; an effort is rejected for a model that lists none. Statistics are kept
-  per model *and* effort, so `qwen3-30b-local@high` and `qwen3-30b-local@low` are
+  per model *and* effort, so `qwen3-8b@high` and `qwen3-8b@low` are
   separate players.
 - Effort values follow the OpenAI `reasoning_effort` names: `none`, `minimal`,
   `low`, `medium`, `high`, `xhigh`, `max`. A model lists only the ones its server
