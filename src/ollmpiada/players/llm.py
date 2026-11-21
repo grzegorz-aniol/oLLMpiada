@@ -109,10 +109,11 @@ def create_llm_player(
             # llama.cpp's field name; other servers ignore it or use their own (configuration docs).
             settings["extra_body"] = {"reasoning_budget_tokens": model.spec.reasoning_budget}
         omit = openai.Omit()
+    settings["extra_headers"] = dict(model.provider.headers)
     if not token:
         # Without a token no Authorization header is sent (both SDKs send the key as a
         # bearer token): a proxy may handle security itself.
-        settings["extra_headers"] = {"Authorization": omit}
+        settings["extra_headers"]["Authorization"] = omit
     return LLMPlayer(name, ai_model, timeout_s=timeout_s, settings=settings)
 
 

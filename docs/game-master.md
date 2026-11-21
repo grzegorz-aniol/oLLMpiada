@@ -159,7 +159,8 @@ client's per-attempt limit, 600 s by
 default, which `request_timeout` alone cannot raise) from the provider's
 `timeout_s` or else `OLLMPIADA_REQUEST_TIMEOUT_S` (see
 [provider fields](configuration.md#provider-fields)), and turns off the provider
-client's own retries, so the game master owns every retry. Without a token the `Authorization` header is
+client's own retries, so the game master owns every retry. The provider's
+`headers` go out as `extra_headers`. Without a token the `Authorization` header is
 omitted per request (`extra_headers` with the SDK's `Omit`), because both the
 OpenAI and the Anthropic clients otherwise always send the key as a bearer token.
 Reasoning tokens are known when the model reports them (OpenAI

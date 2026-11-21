@@ -435,6 +435,40 @@ def test_llm_timeout_reaches_each_http_attempt(models, model_id, reply):
     assert timeouts == [900]
 
 
+PASSTHROUGH = {"x-bf-passthrough-extra-params": "true"}
+
+
+def with_headers(model):
+    provider = model.provider.model_copy(update={"headers": PASSTHROUGH})
+    return dataclasses.replace(model, provider=provider)
+
+
+def completion_reply(request: httpx2.Request) -> httpx2.Response:
+    return httpx2.Response(200, json=CHAT_COMPLETION)
+
+
+@pytest.mark.parametrize(
+    ("model_id", "reply", "authorization"),
+    [
+        ("local-llm", completion_reply, None),
+        ("hosted-llm", completion_reply, "Bearer secret"),
+        ("claude", anthropic_reply, None),
+    ],
+)
+def test_llm_sends_provider_headers_beside_authorization(models, model_id, reply, authorization):
+    sent: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return reply(request)
+
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    model = with_headers(models[model_id])
+    play(create_llm_player("p", model, effort=None, timeout_s=5, http_client=client))
+    assert sent[0].headers["x-bf-passthrough-extra-params"] == "true"
+    assert sent[0].headers.get("authorization") == authorization
+
+
 def test_llm_anthropic_http_error_is_a_transport_error(models):
     sent = []
 
@@ -504,6 +538,16 @@ def test_decision_offers_accept_draw_only_while_pending_and_sends_token(models):
     assert response.answer == TurnAnswer(action="accept_draw")
     assert sent[0].headers["authorization"] == "Bearer tok"
     assert "accept_draw" in json.loads(sent[0].content)["questions"]["action"]["criteria"]
+
+
+@pytest.mark.parametrize(("token", "authorization"), [(None, None), ("tok", "Bearer tok")])
+def test_decision_sends_provider_headers(models, token, authorization):
+    sent = []
+    body = {"action": "resign"}
+    models = {"basal-mini": with_headers(models["basal-mini"])}
+    play(decision_player(models, answering(body, sent), token=token))
+    assert sent[0].headers["x-bf-passthrough-extra-params"] == "true"
+    assert sent[0].headers.get("authorization") == authorization
 
 
 @pytest.mark.parametrize(

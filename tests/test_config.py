@@ -58,6 +58,13 @@ def test_provider_timeout_and_model_max_tokens(tmp_path, models_data):
     assert models["local-llm"].spec.max_tokens == 2048
 
 
+def test_provider_headers_are_optional(tmp_path, models_data):
+    models_data["providers"][0]["headers"] = {"x-bf-passthrough-extra-params": "true"}
+    models = load_models(write(tmp_path, models_data), {})
+    assert models["local-llm"].provider.headers == {"x-bf-passthrough-extra-params": "true"}
+    assert models["basal-mini"].provider.headers == {}
+
+
 def test_openai_model_takes_reasoning_budget_below_max_tokens(tmp_path, models_data):
     models_data["models"][0].update(max_tokens=8192, reasoning_budget=4096)
     models_data["models"][1]["reasoning_budget"] = 100_000
@@ -115,6 +122,12 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         ),
         (lambda d: d["models"][0].pop("model"), r"models\.0\.model\s+Field required"),
         (lambda d: d["providers"][0].update(token="leak"), r"providers\.0\.token\s+Extra inputs"),
+        (lambda d: d["providers"][0].update(headers={"": "x"}), r"headers\.+\[key\]\s+String"),
+        (lambda d: d["providers"][0].update(headers={"x-a": 1}), r"headers\.x-a\s+Input should"),
+        (
+            lambda d: d["providers"][1].update(headers={"authorization": "Bearer leak"}),
+            "Authorization comes from token_env",
+        ),
     ],
     ids=[
         "duplicate-id",
@@ -136,6 +149,9 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "reasoning-budget-not-below-max-tokens",
         "missing-field",
         "unknown-field",
+        "empty-header-name",
+        "header-value-not-string",
+        "authorization-header",
     ],
 )
 def test_invalid_config_is_rejected(tmp_path, models_data, change, message):

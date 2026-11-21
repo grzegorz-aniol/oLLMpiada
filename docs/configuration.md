@@ -53,6 +53,7 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 | `api` | yes | The API the provider speaks, which picks the player adapter (below) |
 | `token_env` | no | Name of the environment variable holding the bearer token |
 | `timeout_s` | no | Timeout of one call to this provider's models in seconds, above 0; missing means `OLLMPIADA_REQUEST_TIMEOUT_S` |
+| `headers` | no | HTTP headers sent on every call to this provider's models, as a map of name to value; missing means none |
 
 | `api` | Player | `url` |
 | --- | --- | --- |
@@ -74,6 +75,11 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 - **Rule:** a provider's `timeout_s` replaces `OLLMPIADA_REQUEST_TIMEOUT_S` for
   every call to its models, whatever the `api`; it exists because local inference
   can be much slower than the hosted default allows for.
+- **Rule:** a provider's `headers` go out on every call to its models, whatever
+  the `api`, and hold only non-secret values; tokens still come only from
+  `token_env`, so the loader rejects an `Authorization` header (any case). They
+  exist for proxy switches such as Bifrost's passthrough header (see
+  [`reasoning_budget`](#model-fields)).
 
 ### Model fields
 
@@ -126,12 +132,15 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 - **Sensitive:** `reasoning_budget_tokens` is not part of the OpenAI API. Servers
   that name their budget differently (OpenRouter takes `reasoning.max_tokens`)
   or have none ignore it, and llama.cpp applies it only to models whose chat
-  template marks the thinking block. A proxy must forward unknown request fields:
-  per Bifrost's request-options docs, its standard route (`/v1`) collects them as
-  extra parameters, forwarded when passthrough is on
-  (`x-bf-passthrough-extra-params: true`), while its OpenAI integration route
-  (`/openai/v1`) takes such fields only nested under `extra_params`, so a
-  top-level budget sent there does not reach the server.
+  template marks the thinking block. A proxy must forward unknown request fields.
+  Bifrost (v2.5.1, checked live) drops them on its OpenAI integration route
+  (`/openai/v1`), where the passthrough header only unpacks a nested
+  `extra_params` object; its standard route (`/v1`) forwards top-level fields
+  only with the header `x-bf-passthrough-extra-params: true` on each request, and
+  it has no per-provider switch for that. So point the provider at Bifrost's
+  `/v1`, set the header in the provider's `headers`, and use Bifrost's
+  provider-prefixed model name (`llama.cpp/<model>`). Bifrost does not turn
+  `reasoning.max_tokens` into a budget for custom providers.
 - **Sensitive:** for `anthropic-messages` PydanticAI looks the model up by name to
   know how to send thinking, so a proxy route prefix is stripped for that lookup
   (`anthropic/claude-haiku-5-5` is treated as `claude-haiku-5-5`). With thinking
@@ -141,8 +150,9 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 The loader validates the file with Pydantic at startup: unique ids, existing
 provider names, known `api` and effort values, `max_options` of at least 2,
 `max_tokens` of at least 1, a `reasoning_budget` of at least 1 and below
-`max_tokens`, a positive `timeout_s`. An
-invalid file stops the app with a message naming the bad entry.
+`max_tokens`, a positive `timeout_s`, `headers` with non-empty names, string
+values and no `Authorization`. An invalid file stops the app with a message
+naming the bad entry.
 
 ## Environment
 

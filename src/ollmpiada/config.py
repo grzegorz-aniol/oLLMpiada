@@ -8,7 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +64,15 @@ class Provider(_Strict):
     api: Api
     token_env: str | None = None
     timeout_s: Annotated[float, Field(gt=0)] | None = None
+    headers: dict[Annotated[str, Field(min_length=1)], str] = {}
+
+    @field_validator("headers")
+    @classmethod
+    def _no_authorization(cls, headers: dict[str, str]) -> dict[str, str]:
+        # Headers are written in the config file, which must never hold a token.
+        if any(name.lower() == "authorization" for name in headers):
+            raise ValueError("Authorization comes from token_env, not from headers")
+        return headers
 
 
 class ModelSpec(_Strict):

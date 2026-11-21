@@ -57,7 +57,9 @@ class DecisionPlayer:
             TransportError: The call failed or the server reported an error.
         """
         payload = {"model": self._model.spec.model, "state": state, "questions": questions}
-        headers = {"Authorization": f"Bearer {self._model.token}"} if self._model.token else {}
+        headers = dict(self._model.provider.headers)
+        if self._model.token:
+            headers["Authorization"] = f"Bearer {self._model.token}"
         async with httpx.AsyncClient(timeout=self._timeout_s, transport=self._transport) as client:
             start = time.perf_counter()
             try:
