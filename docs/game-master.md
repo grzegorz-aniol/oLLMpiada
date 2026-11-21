@@ -283,7 +283,10 @@ effort (see [configuration](configuration.md#model-fields)).
   included, game master work excluded. Shown as total and average per move.
 - **Tokens** - input, output and reasoning tokens from PydanticAI's usage for LLM
   players; from the response for decision players when it reports any, otherwise
-  shown as unknown, never as zero. Reasoning tokens are unknown on their own when
+  shown as unknown, never as zero. A decision server that reports no output count
+  but a `total_tokens` (SystemOne sends only `prompt_tokens` and `total_tokens`)
+  gets `total_tokens` minus the input as its output, 0 when they match, because a
+  decision model generates no text. Reasoning tokens are unknown on their own when
   a server reports usage without them (llama.cpp sends no
   `completion_tokens_details`).
 - **Illegal attempts** - rejected answers, total and per game.

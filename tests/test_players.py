@@ -555,6 +555,21 @@ def test_decision_reports_usage_when_present(models):
     assert play(decision_player(models, answering(body))).usage == Usage(900, 3, 7)
 
 
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"prompt_tokens": 2968, "total_tokens": 2968}, Usage(2968, 0, None)),
+        ({"prompt_tokens": 900, "total_tokens": 905}, Usage(900, 5, None)),
+        ({"prompt_tokens": 900}, None),
+        ({"prompt_tokens": 900, "total_tokens": 800}, None),
+    ],
+    ids=["systemone-total-equals-prompt", "total-above-prompt", "no-total", "total-below-prompt"],
+)
+def test_decision_derives_output_tokens_from_total(models, usage, expected):
+    body = {"action": "resign", "usage": usage}
+    assert play(decision_player(models, answering(body))).usage == expected
+
+
 def test_decision_error_body_is_a_transport_error(models):
     with pytest.raises(TransportError, match="too many options"):
         play(decision_player(models, answering({"error": "too many options"})))

@@ -226,8 +226,15 @@ def _usage(body: object) -> Usage | None:
     if not isinstance(usage, Mapping):
         return None
     input_tokens = usage.get("input_tokens", usage.get("prompt_tokens"))
+    if not isinstance(input_tokens, int):
+        return None
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
-    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+    total_tokens = usage.get("total_tokens")
+    if output_tokens is None and isinstance(total_tokens, int):
+        # SystemOne reports only prompt and total: a decision model scores options
+        # and generates no text, so the difference is a measured output count.
+        output_tokens = total_tokens - input_tokens
+    if not isinstance(output_tokens, int) or output_tokens < 0:
         return None
     reasoning_tokens = usage.get("reasoning_tokens")
     if not isinstance(reasoning_tokens, int):
