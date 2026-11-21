@@ -17,13 +17,17 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 
 - **Decision:** the file is local and gitignored, because providers and models
   differ per machine. It holds no secrets, only the names of environment variables
-  that carry tokens. Start from this example:
+  that carry tokens. Start from this example; it uses every field in the tables
+  below:
 
 ```json
 {
   "providers": [
     {"name": "local-llama", "url": "http://127.0.0.1:1234/v1",
      "api": "openai-completions", "timeout_s": 600},
+    {"name": "bifrost", "url": "http://127.0.0.1:8080/v1",
+     "api": "openai-completions", "timeout_s": 300,
+     "headers": {"x-bf-passthrough-extra-params": "true"}},
     {"name": "openrouter", "url": "https://openrouter.ai/api/v1",
      "api": "openai-completions", "token_env": "OPENROUTER_API_KEY"},
     {"name": "anthropic", "url": "https://api.anthropic.com",
@@ -34,6 +38,13 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
     {"id": "qwen3-30b-local", "provider": "local-llama", "model": "qwen3-30b-a3b",
      "reasoning_efforts": ["none", "low", "medium", "high"],
      "max_tokens": 8192, "reasoning_budget": 4096},
+    {"id": "qwen-3.5-4B", "provider": "bifrost",
+     "model": "llama.cpp/unsloth/Qwen3.5-4B-GGUF:Q8_0",
+     "reasoning_efforts": ["none", "low", "medium", "high"],
+     "max_tokens": 8192, "reasoning_budget": 512},
+    {"id": "bielik-4.5b", "provider": "bifrost",
+     "model": "llama.cpp/speakleash/Bielik-4.5B-v3.0-Instruct-GGUF:Q8_0",
+     "max_tokens": 1024, "output_mode": "prompted"},
     {"id": "gpt-oss-120b", "provider": "openrouter", "model": "openai/gpt-oss-120b",
      "reasoning_efforts": ["low", "medium", "high"], "max_tokens": 16384},
     {"id": "haiku-5-5", "provider": "anthropic", "model": "claude-haiku-5-5",
@@ -43,6 +54,12 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   ]
 }
 ```
+
+`qwen-3.5-4B` goes through a Bifrost proxy, so its provider sends the
+passthrough header that lets `reasoning_budget` reach llama.cpp; `bielik-4.5b`
+uses `prompted` output because llama.cpp cannot build a grammar for it (both in
+[model fields](#model-fields)). The [README](../README.md#configuring-models)
+walks through a real config and why each option is there.
 
 ### Provider fields
 
