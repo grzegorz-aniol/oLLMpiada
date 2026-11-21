@@ -18,12 +18,12 @@ from ollmpiada.games.base import Prompt
 from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
-from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player
+from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player, llm_message
 from tests.fakes import ScriptedPlayer, unreadable
 
 PROMPT = Prompt(system="RULES\n", user="POSITION\n")
 REQUEST = TurnRequest(prompt=PROMPT, legal_moves={"e2e4": "e4", "g1f3": "Nf3"})
-SYSTEM_SENT = (PROMPT.system + ANSWER_FORMAT).strip()
+MESSAGE_SENT = llm_message(PROMPT)
 
 
 @pytest.fixture
@@ -129,7 +129,7 @@ def test_llm_answer_with_usage_and_settings():
     assert settings["max_retries"] == 0
 
 
-def test_llm_sends_rules_and_answer_format_as_instructions_and_the_turn_as_user_prompt():
+def test_llm_sends_rules_answer_format_and_turn_as_one_user_message_without_instructions():
     requests = []
 
     def capture(messages, info):
@@ -139,9 +139,9 @@ def test_llm_sends_rules_and_answer_format_as_instructions_and_the_turn_as_user_
     player = LLMPlayer("p", FunctionModel(capture), timeout_s=7)
     play(player)
     request = requests[0]
-    assert request.instructions == SYSTEM_SENT
-    assert SYSTEM_SENT.startswith("RULES\n\nANSWER FORMAT\n")
-    assert [part.content for part in request.parts] == ["POSITION\n"]
+    assert request.instructions is None
+    assert [part.content for part in request.parts] == [MESSAGE_SENT]
+    assert MESSAGE_SENT == "RULES\n" + ANSWER_FORMAT + "\nPOSITION\n"
 
 
 def test_llm_without_effort_sends_none():
@@ -263,10 +263,7 @@ def test_llm_over_openai_compatible_http(models, model_id, authorization):
     body = json.loads(request.content)
     assert body["model"] == models[model_id].spec.model
     assert body.get("reasoning_effort") == effort
-    assert body["messages"] == [
-        {"role": "system", "content": SYSTEM_SENT},
-        {"role": "user", "content": "POSITION\n"},
-    ]
+    assert body["messages"] == [{"role": "user", "content": MESSAGE_SENT}]
 
 
 @pytest.mark.parametrize(("max_tokens", "sent"), [(None, None), (256, 256)])
@@ -325,6 +322,8 @@ def with_output_mode(model, mode):
 def test_llm_output_mode_decides_how_openai_asks_for_the_answer(
     models, mode, tool_choice, response_format
 ):
+    """Only prompted output has a system message, PydanticAI's schema: some chat templates
+    (Bielik on llama.cpp) refuse a second one."""
     bodies = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -342,7 +341,15 @@ def test_llm_output_mode_decides_how_openai_asks_for_the_answer(
     assert ("tools" in body) == (mode == "tool")
     assert body.get("tool_choice") == tool_choice
     assert body.get("response_format", {}).get("type") == response_format
-    assert body["messages"][0]["content"].startswith(SYSTEM_SENT)
+    system = [m["content"] for m in body["messages"] if m["role"] == "system"]
+    assert [m for m in body["messages"] if m["role"] != "system"] == [
+        {"role": "user", "content": MESSAGE_SENT}
+    ]
+    if mode == "prompted":
+        assert len(system) == 1 and '"offer_draw"' in system[0]
+        assert "RULES" not in system[0]
+    else:
+        assert system == []
 
 
 @pytest.mark.parametrize(
@@ -455,9 +462,9 @@ def test_llm_over_anthropic_messages_http(
     assert request.headers.get("authorization") == authorization
     body = json.loads(request.content)
     assert body["model"] == "anthropic/claude-haiku-5-5"
-    assert body["system"] == [{"type": "text", "text": SYSTEM_SENT}]
+    assert "system" not in body
     assert body["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "POSITION\n"}]}
+        {"role": "user", "content": [{"type": "text", "text": MESSAGE_SENT}]}
     ]
     assert body.get("thinking") == thinking
     assert body.get("output_config", {}).get("effort") == output_effort
@@ -478,7 +485,14 @@ def test_llm_output_mode_over_anthropic_messages(models, mode, output_format):
     body = bodies[0]
     assert "tools" not in body
     assert body.get("output_config", {}).get("format", {}).get("type") == output_format
-    assert body["system"][0]["text"].startswith(SYSTEM_SENT)
+    assert body["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": MESSAGE_SENT}]}
+    ]
+    if mode == "prompted":
+        [block] = body["system"]
+        assert '"offer_draw"' in block["text"] and "RULES" not in block["text"]
+    else:
+        assert "system" not in body
 
 
 def test_llm_max_tokens_caps_anthropic_output(models):

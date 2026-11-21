@@ -14,7 +14,7 @@ from typing import Literal
 from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game, warm_up
 from ollmpiada.games.base import Game, Side
 from ollmpiada.players.base import Player, TransportError, Usage
-from ollmpiada.players.llm import ANSWER_FORMAT
+from ollmpiada.players.llm import llm_message
 
 Status = Literal["warming up", "running", "finished", "aborted", "stopped"]
 
@@ -151,13 +151,14 @@ CompetitionEvent = Event | CompetitionProgress | CompetitionFinished
 
 
 def prompt_version(game: Game) -> str:
-    """Hash of rendered prompts, so it covers both templates, every wording branch in code and
-    the LLM answer format."""
+    """Hash of LLM messages rendered from sample prompts, so it covers both templates, every
+    wording branch in code, the LLM answer format and the message layout."""
     state = game.new_state()
     plain = game.context(state, turn=1, max_turns=1)
     retry = game.context(state, turn=1, max_turns=1, draw_offered=True, rejection="-")
-    # repr keeps the system/user boundary, so moving text between the parts changes the hash.
-    text = repr((game.prompt(plain), game.prompt(retry), ANSWER_FORMAT))
+    # The answer format sits at the system/user boundary, so moving text between the parts
+    # changes the hash.
+    text = repr((llm_message(game.prompt(plain)), llm_message(game.prompt(retry))))
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 

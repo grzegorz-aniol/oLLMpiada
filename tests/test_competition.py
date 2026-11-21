@@ -331,7 +331,7 @@ def test_prompt_version_tells_the_system_and_user_parts_apart(monkeypatch):
 
 def test_prompt_version_covers_the_llm_answer_format(monkeypatch):
     version = prompt_version(ChessGame())
-    monkeypatch.setattr("ollmpiada.competition.ANSWER_FORMAT", "ANSWER IN JSON")
+    monkeypatch.setattr("ollmpiada.players.llm.ANSWER_FORMAT", "ANSWER IN JSON")
     assert prompt_version(ChessGame()) != version
 
 

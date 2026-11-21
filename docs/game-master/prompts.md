@@ -18,10 +18,11 @@ What both players are told each turn, and the answer format each player adapter 
   stakes of each rule below, and asks the model to check its move against the
   legal list before answering.
 - **Decision:** the prompt has two parts. The **system** part holds what is true
-  for the whole game: role and goal, game rules and referee rules; the LLM adapter
-  adds its answer format to it. The **user** part holds only the turn at hand: the
-  current state and what to answer now. Models weigh system instructions as
-  standing rules, and the per-turn message stays short.
+  for the whole game: role and goal, game rules and referee rules. The **user**
+  part holds only the turn at hand: the current state and what to answer now. The
+  standing rules stay apart from the turn, and the LLM adapter puts its answer
+  format between them. The names follow chat roles, but no player sends the
+  system part as a system message (see [answer formats](#answer-formats)).
 
 System part, in order:
 
@@ -60,9 +61,11 @@ The draw-offer and previous-attempt sentences are worded in `Game.prompt`
 (`games/base.py`), because `string.Template` has no conditionals.
 
 - **Rule:** the prompt version recorded with a competition covers both parts, the
-  wording in `Game.prompt` and the LLM answer format, so runs with different
-  prompts are not compared by accident. `prompt_version` in `competition.py`
-  hashes rendered sample prompts with the system/user boundary kept.
+  wording in `Game.prompt`, the LLM answer format and the layout of the LLM
+  message, so runs with different prompts are not compared by accident.
+  `prompt_version` in `competition.py` hashes the LLM messages (`llm_message`)
+  rendered from sample prompts; the answer format sits at the system/user
+  boundary, so moving text between the parts changes the version too.
 
 ## Answer formats
 
@@ -80,10 +83,24 @@ class TurnAnswer(BaseModel):
     offer_draw: bool = False
 ```
 
-The adapter sends the system part as PydanticAI `instructions` (a `system`
-message for OpenAI chat completions, the `system` field for Anthropic messages)
-with a short ANSWER FORMAT section naming the three fields appended, and the user
-part as the user prompt. The chosen reasoning effort is mapped per API, as
+The adapter sends one user message and no PydanticAI `instructions`:
+`llm_message` in `players/llm.py` joins the system part, a short ANSWER FORMAT
+section naming the three fields, and the user part, in that order. The text that
+is the same every turn comes first, so a local server can reuse its cached
+prompt prefix.
+
+- **Decision:** ollmpiada sends no system message to LLM players, on every API
+  and in every output mode, so a request carries at most one: none in `tool` and
+  `native` mode, PydanticAI's JSON schema in `prompted` mode. Some chat templates
+  (Bielik 3.1 on llama.cpp) refuse more than one system message. In PydanticAI
+  2.71, on OpenAI chat completions every instruction part becomes its own
+  `system` message and `prompted` output adds the schema as one more part, so
+  ollmpiada's own instructions would make two. On Anthropic messages the parts
+  are text blocks of the single `system` field. PydanticAI's profile flag
+  `openai_chat_supports_multiple_system_messages=False` would merge them
+  instead, but only on OpenAI and only where configured.
+
+The chosen reasoning effort is mapped per API, as
 described in [model fields](../configuration.md#model-fields), and so are the
 optional `max_tokens` cap and `reasoning_budget`. The adapter sets both
 `request_timeout` (the deadline of the whole call) and `timeout` (the SDK
@@ -105,8 +122,8 @@ Reasoning tokens are known when the model reports them (OpenAI
   [`output_mode`](../configuration.md#model-fields) picks the agent's output type:
   `TurnAnswer` itself for `tool` (an output tool, the default),
   `NativeOutput(TurnAnswer)` for `native` (the API's JSON-schema output) or
-  `PromptedOutput(TurnAnswer)` for `prompted` (PydanticAI adds the JSON schema to
-  the instructions after the ANSWER FORMAT section and parses the reply text,
+  `PromptedOutput(TurnAnswer)` for `prompted` (PydanticAI sends the JSON schema as
+  its instructions, the request's only system message, and parses the reply text,
   plain JSON or in a code fence). The ANSWER FORMAT section is sent and output
   retries stay at zero in every mode. The prompt version does not cover the
   output mode, which is model config like `max_tokens`.

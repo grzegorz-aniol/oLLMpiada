@@ -112,8 +112,8 @@ The optional settings and why they are there:
   structured-output grammar llama.cpp fails to build. The default, `tool`, makes
   the model answer by calling an output tool; `native` uses the API's
   JSON-schema output instead. Both make llama.cpp build a grammar. `prompted`
-  sends no tool and no `response_format`: the JSON schema goes into the
-  instructions and the reply text is parsed.
+  sends no tool and no `response_format`: the JSON schema goes into a system
+  message and the reply text is parsed.
 - **`max_options: 20`** on the decision model, the most options its server
   accepts in one question; longer move lists are asked piece by piece.
 

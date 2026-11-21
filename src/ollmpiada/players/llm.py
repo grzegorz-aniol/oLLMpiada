@@ -19,12 +19,13 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from ollmpiada.config import Effort, Model, OutputMode
+from ollmpiada.games.base import Prompt
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
 
 # The first-run banner would print into the terminal UI.
 pydantic_ai.BANNER_ENABLED = False
 
-# Appended to the game's system prompt, which ends with a newline.
+# Follows the game's system part, which ends with a newline.
 ANSWER_FORMAT = """
 ANSWER FORMAT
 
@@ -40,6 +41,16 @@ _OUTPUT_TYPES = {
     "native": NativeOutput(TurnAnswer),
     "prompted": PromptedOutput(TurnAnswer),
 }
+
+
+def llm_message(prompt: Prompt) -> str:
+    """The one user message an LLM player sends: rules, answer format, then the turn.
+
+    No system message comes from ollmpiada, since some chat templates refuse a second one and
+    PydanticAI adds its own for prompted output. The text that is the same every turn goes
+    first, so a server can reuse its cached prefix.
+    """
+    return f"{prompt.system}{ANSWER_FORMAT}\n{prompt.user}"
 
 
 class LLMPlayer:
@@ -72,9 +83,7 @@ class LLMPlayer:
         start = time.perf_counter()
         with capture_run_messages() as messages:
             try:
-                run = await self._agent.run(
-                    request.prompt.user, instructions=request.prompt.system + ANSWER_FORMAT
-                )
+                run = await self._agent.run(llm_message(request.prompt))
                 answer = run.output
             except UnexpectedModelBehavior as e:
                 format_error = _describe(e)
