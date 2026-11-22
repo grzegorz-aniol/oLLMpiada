@@ -9,7 +9,7 @@ LEGAL MOVES
 
 You play $side. Your legal moves (SAN): $legal_moves
 
-Unless you resign or accept a draw, choose exactly one move from this list.
+$choose_move
 Before answering, check that your move appears in it, spelled as listed.
 
 $previous_attempt

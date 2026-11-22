@@ -5,7 +5,16 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ollmpiada.games.base import AdjudicationError, Game, IllegalMove, Outcome, Side
+from ollmpiada.games.base import (
+    AdjudicationError,
+    Game,
+    IllegalMove,
+    Outcome,
+    PromptContext,
+    Side,
+    in_opening,
+    opening_notice,
+)
 from ollmpiada.players.base import (
     PermanentError,
     Player,
@@ -125,20 +134,25 @@ async def play_game[S](
         side = game.side_to_move(state)
         player = players[0 if side is Side.FIRST else 1]
         draw_offered = draw_offer_by is side.opponent
+        turn = moves_made[side] + 1
+        legal = game.legal_moves(state)
         attempts: list[Attempt] = []
         accepted: tuple[TurnAnswer, str | None] | None = None
+        if in_opening(turn) and len(legal) == 1:
+            # A move-only turn with one legal move leaves the player no choice, and a decision
+            # model cannot be asked a one-option question; the game master plays it for every
+            # player alike, so the turn has no attempts and costs no call.
+            accepted = TurnAnswer(action="move"), next(iter(legal))
         rejection = None
         while accepted is None and len(attempts) < ATTEMPTS_PER_TURN:
             ctx = game.context(
                 state,
-                turn=moves_made[side] + 1,
+                turn=turn,
                 max_turns=max_turns,
                 draw_offered=draw_offered,
                 rejection=rejection,
             )
-            request = TurnRequest(
-                game.prompt(ctx), game.legal_moves(state), draw_offered, game.move_groups(state)
-            )
+            request = _request(game, state, ctx)
             try:
                 response = await _call(player, request, backoff_s)
             except TransportError as e:
@@ -150,7 +164,7 @@ async def play_game[S](
                 return result
             publish(AnswerReceived(number, side, player.name, response.elapsed_s, response.usage))
             try:
-                accepted = _validate(game, state, response, draw_offered)
+                accepted = _validate(game, state, response, request)
                 attempts.append(Attempt(response.raw, response.elapsed_s, response.usage))
             except IllegalMove as e:
                 reason = str(e)
@@ -175,7 +189,7 @@ async def play_game[S](
             break
 
         assert move_id is not None
-        label = game.legal_moves(state)[move_id]
+        label = legal[move_id]
         state = game.apply(state, move_id)
         moves_made[side] += 1
         draw_offer_by = side if answer.offer_draw else None
@@ -195,11 +209,22 @@ async def play_game[S](
     return result
 
 
-def opening_request[S](game: Game[S], *, max_turns: int) -> TurnRequest:
-    """The first turn of a new game, for calls made outside a game."""
+def start_request[S](game: Game[S], *, max_turns: int, turn: int = 1) -> TurnRequest:
+    """A turn in the starting position of a new game, for calls made outside a game (the
+    warm-up and `ollmpiada probe`); `turn` decides whether it falls in the opening and so
+    which answer format it asks for."""
     state = game.new_state()
-    prompt = game.prompt(game.context(state, turn=1, max_turns=max_turns))
-    return TurnRequest(prompt, game.legal_moves(state), move_groups=game.move_groups(state))
+    return _request(game, state, game.context(state, turn=turn, max_turns=max_turns))
+
+
+def _request[S](game: Game[S], state: S, ctx: PromptContext) -> TurnRequest:
+    return TurnRequest(
+        game.prompt(ctx),
+        game.legal_moves(state),
+        ctx.draw_offered,
+        game.move_groups(state),
+        ctx.move_only,
+    )
 
 
 async def warm_up[S](
@@ -211,7 +236,7 @@ async def warm_up[S](
     Raises:
         TransportError: The player still failed after the transport retries.
     """
-    await _call(player, opening_request(game, max_turns=max_turns), backoff_s)
+    await _call(player, start_request(game, max_turns=max_turns), backoff_s)
 
 
 async def _call(player: Player, request: TurnRequest, backoff_s: tuple[float, ...]) -> TurnResponse:
@@ -229,7 +254,7 @@ async def _call(player: Player, request: TurnRequest, backoff_s: tuple[float, ..
 
 
 def _validate[S](
-    game: Game[S], state: S, response: TurnResponse, draw_offered: bool
+    game: Game[S], state: S, response: TurnResponse, request: TurnRequest
 ) -> tuple[TurnAnswer, str | None]:
     """The accepted answer and its move id.
 
@@ -239,7 +264,9 @@ def _validate[S](
     answer = response.answer
     if answer is None:
         raise IllegalMove(f"the answer does not match the answer format: {response.format_error}")
-    if answer.action == "accept_draw" and not draw_offered:
+    if request.move_only and (answer.action != "move" or answer.offer_draw):
+        raise IllegalMove(f"{opening_notice()}; play a move")
+    if answer.action == "accept_draw" and not request.draw_offered:
         raise IllegalMove("there is no draw offer to accept")
     if answer.action != "move":
         return answer, None

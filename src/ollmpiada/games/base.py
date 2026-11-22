@@ -13,6 +13,25 @@ from rich.console import RenderableType
 from ollmpiada.config import Settings
 
 ADJUDICATION = "adjudication"
+OPENING_MOVES = 5
+"""Moves per side at the start of a game in which a player can only move: no resignation and
+no draw offer (docs/game-master/turns.md#opening). Only this module reads it, at call time, so
+tests can turn the opening off by patching it here."""
+
+
+def first_full_move() -> int:
+    """A side's first move after the opening, the first one in which every answer is allowed."""
+    return OPENING_MOVES + 1
+
+
+def in_opening(turn: int) -> bool:
+    """A side's `turn` (its move number) falls in the opening, where it can only move."""
+    return turn <= OPENING_MOVES
+
+
+def opening_notice() -> str:
+    """When resigning and draw offers become allowed, as the prompt and a rejection say it."""
+    return f"resigning and draw offers start with your move {first_full_move()}"
 
 
 class Side(StrEnum):
@@ -61,6 +80,11 @@ class PromptContext:
     max_turns: int
     draw_offered: bool = False
     rejection: str | None = None
+
+    @property
+    def move_only(self) -> bool:
+        """The turn is in the opening, where a move is the only answer allowed."""
+        return in_opening(self.turn)
 
 
 @dataclass(frozen=True)
@@ -179,6 +203,12 @@ class Game[S](ABC):
             turn=ctx.turn,
             max_turns=ctx.max_turns,
             turns_left=ctx.max_turns - ctx.turn + 1,
+            opening_moves=OPENING_MOVES,
+            choose_move=(
+                f"Choose exactly one move from this list; {opening_notice()}."
+                if ctx.move_only
+                else "Unless you resign or accept a draw, choose exactly one move from this list."
+            ),
             draw_offer=(
                 f"{self.side_name(ctx.side.opponent)} offers a draw. Answer accept_draw to "
                 "accept it, or make a move to decline it."

@@ -16,11 +16,11 @@ from rich.table import Column, Table
 
 from ollmpiada.competition import Competition, CompetitionEvent, CompetitionState, load_state
 from ollmpiada.config import ConfigError, Model, Settings, load_models, load_settings
-from ollmpiada.game_master import opening_request
+from ollmpiada.game_master import start_request
 from ollmpiada.games import GAMES
-from ollmpiada.games.base import Game, GameSetupError, IllegalMove
+from ollmpiada.games.base import Game, GameSetupError, IllegalMove, first_full_move
 from ollmpiada.players import PlayerError, create_player
-from ollmpiada.players.base import Player, TransportError
+from ollmpiada.players.base import Player, TransportError, TurnRequest, TurnResponse
 from ollmpiada.tui import LiveView, PlainOutput, results_table, stats_table, summary_lines
 
 DEFAULT_MAX_TURNS = 50
@@ -32,7 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ollmpiada", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="list configured models")
-    probe = commands.add_parser("probe", help="send one opening-position turn to a model")
+    probe = commands.add_parser(
+        "probe", help="send an opening and a later turn to a model, one per answer format"
+    )
     probe.add_argument("player", help="<model-id>[@effort]")
     probe.add_argument("--game", choices=GAMES, default="chess")
     run = commands.add_parser("run", help="play a competition between two models")
@@ -98,20 +100,41 @@ def _models_table(models: dict[str, Model]) -> Table:
 def _probe(
     console: Console, settings: Settings, models: dict[str, Model], name: str, game: Game
 ) -> int:
-    """Exit code 0 when the model answered in the expected format."""
+    """Exit code 0 when the model answered both answer formats as expected: the move-only one
+    of the opening and the full one used from the first move after it."""
     try:
         player = create_player(name, models, timeout_s=settings.request_timeout_s)
     except PlayerError as e:
         console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
         return 2
-    request = opening_request(game, max_turns=DEFAULT_MAX_TURNS)
+    full = first_full_move()
+    requests = {
+        "Opening turn (move only)": start_request(game, max_turns=DEFAULT_MAX_TURNS),
+        f"Move {full} (full answer)": start_request(game, max_turns=DEFAULT_MAX_TURNS, turn=full),
+    }
     console.print(f"Probing {name} with the opening position of {game.name}...")
-    try:
-        response = asyncio.run(player.play(request))
-    except TransportError as e:
-        console.print(f"[red]Transport error:[/red] {escape(str(e))}", highlight=False)
-        return 1
+    return asyncio.run(_probe_turns(console, game, player, requests))
 
+
+async def _probe_turns(
+    console: Console, game: Game, player: Player, requests: dict[str, TurnRequest]
+) -> int:
+    """Plays the turns in one event loop, which the player's HTTP client is bound to, and
+    prints each one as it is answered, so a transport error keeps the turns before it."""
+    answered = True
+    for label, request in requests.items():
+        try:
+            response = await player.play(request)
+        except TransportError as e:
+            console.print(f"[red]Transport error:[/red] {escape(str(e))}", highlight=False)
+            return 1
+        console.print(f"[bold]{label}[/bold]")
+        console.print(_probe_table(game, request, response))
+        answered = answered and response.answer is not None
+    return 0 if answered else 1
+
+
+def _probe_table(game: Game, request: TurnRequest, response: TurnResponse) -> Table:
     usage = response.usage
     table = Table.grid(padding=(0, 2))
     table.add_row("Raw answer", escape(response.raw) or "-")
@@ -130,8 +153,7 @@ def _probe(
         reasoning = "unknown" if usage.reasoning_tokens is None else usage.reasoning_tokens
         tokens = f"in {usage.input_tokens}, out {usage.output_tokens}, reasoning {reasoning}"
     table.add_row("Tokens", tokens if usage else "unknown")
-    console.print(table)
-    return 0 if response.answer else 1
+    return table
 
 
 def _run(

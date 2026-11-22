@@ -435,6 +435,21 @@ def test_game_stats_turn_timer_spans_retries_and_restarts_with_each_move(tmp_pat
     assert row(lines, "model-a")[5:] == ["2", "≥", "100", "≥", "10", "≥", "0"]
 
 
+def test_forced_move_without_a_request_is_listed_and_counted_as_a_move(tmp_path):
+    view, _ = started_game(tmp_path, FakeClock())
+    played = []
+    for side, player, move in [(Side.FIRST, "model-a", "e4"), (Side.SECOND, "model-b", "f6"),
+                               (Side.FIRST, "model-a", "Qh5+")]:  # fmt: skip
+        played.append(move)
+        view.handle(AnswerReceived(1, side, player, 1.0, Usage(100, 10, 0)))
+        view.handle(MoveMade(1, side, player, move, after(*played), draw_offered=False))
+    # The game master plays Black's only legal move itself: no AnswerReceived comes first.
+    view.handle(MoveMade(1, Side.SECOND, "model-b", "g6", after(*played, "g6"), False))
+    text = render(view)
+    assert "(1) e4 f6 (2) Qh5+ g6" in text and "4 moves completed" in text
+    assert row(text.splitlines(), "model-b")[3:5] == ["1", "100"]
+
+
 def test_game_stats_never_show_unreported_reasoning_as_zero(tmp_path):
     view, _ = started_game(tmp_path, FakeClock())
     view.handle(AnswerReceived(1, Side.FIRST, "model-a", 1.0, Usage(100, 10, None)))

@@ -11,7 +11,7 @@ validation, end-of-game rules and how statistics are counted. The game master is
 the referee: models only propose; the game master decides what happens.
 
 - [Turns and retries](turns.md) - the turn loop, requests, side alternation,
-  answer validation and retries.
+  the move-only opening, answer validation and retries.
 - [Prompts and answer formats](prompts.md) - the shared prompt and its templates,
   LLM and decision-player answer formats.
 - [End of game and statistics](results.md) - end conditions, adjudication at the
@@ -37,7 +37,7 @@ interface, so the game master, players and UI never import chess directly:
 | `describe(state)` | Position text for the prompt (board, recent moves, facts the rules need) |
 | `side_names` | Display names of the two sides (for chess `White`, `Black`), used in tables and summaries |
 | `render(state)` | Board for the terminal UI, as a Rich renderable |
-| `context(state, ...)` | The prompt context for the side to move: position, legal moves, turn, draw offer, rejection (implemented once in the base class) |
+| `context(state, ...)` | The prompt context for the side to move: position, legal moves, turn, draw offer, rejection, and whether the turn is a move-only [opening](turns.md#opening) turn (implemented once in the base class) |
 | `prompt(context)` | The shared `Prompt`: its `system` and `user` parts, rendered from the two templates (implemented once in the base class) |
 | `record(state, outcome, players)` | The game's native record saved with each game, and `record_extension` (for chess PGN, `pgn`) |
 

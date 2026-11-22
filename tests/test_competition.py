@@ -152,6 +152,22 @@ def test_unknown_usage_is_not_shown_as_zero(tmp_path):
     assert not a.tokens_known and a.calls_without_usage == 1
 
 
+@pytest.mark.opening
+def test_forced_opening_move_counts_as_a_move_without_a_call_and_is_saved(tmp_path):
+    # 1. e4 f6 2. Qh5+ g6: the game master plays Black's only legal move, g6.
+    state, competition, _ = compete(
+        ["e4", "Qh5+"], ["f6"], tmp_path, games=1, game=Judged(Cp(0)), max_turns=2
+    )
+    b = state.stats["model-b"]
+    assert (b.moves, b.calls, b.thinking_s, b.input_tokens) == (2, 1, 1.0, 100)
+    assert b.calls_without_usage == 0 and b.tokens_known
+    run_dir = competition.run_dir
+    forced = read_json(run_dir / "game-001.json")["turns"][3]
+    assert (forced["action"], forced["move"], forced["attempts"]) == ("move", "g6", [])
+    assert "2. Qh5+ g6" in (run_dir / "game-001.pgn").read_text()
+    assert load_state(run_dir) == state
+
+
 def test_unreported_reasoning_tokens_are_counted_as_unknown(tmp_path):
     answer = TurnResponse('{"action":"resign"}', RESIGN, 2.0, Usage(40, 5, None))
     state, _, _ = compete([answer], [], tmp_path, games=1)
@@ -332,6 +348,13 @@ def test_prompt_version_tells_the_system_and_user_parts_apart(monkeypatch):
 def test_prompt_version_covers_the_llm_answer_format(monkeypatch):
     version = prompt_version(ChessGame())
     monkeypatch.setattr("ollmpiada.players.llm.ANSWER_FORMAT", "ANSWER IN JSON")
+    assert prompt_version(ChessGame()) != version
+
+
+@pytest.mark.opening
+def test_prompt_version_covers_the_move_only_answer_format(monkeypatch):
+    version = prompt_version(ChessGame())
+    monkeypatch.setattr("ollmpiada.players.llm.MOVE_ONLY_ANSWER_FORMAT", "ANSWER WITH A MOVE")
     assert prompt_version(ChessGame()) != version
 
 

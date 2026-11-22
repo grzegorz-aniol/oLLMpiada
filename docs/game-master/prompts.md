@@ -28,8 +28,9 @@ System part, in order:
 
 1. **Role and goal** - which side the model plays and that it must try to win.
 2. **Rules** - the game rules in brief, plus the referee's rules: turn limit and
-   its result, illegal-answer limit and its penalty, automatic draws, how to
-   resign, offer or accept a draw.
+   its result, illegal-answer limit and its penalty, automatic draws, the
+   [opening](turns.md#opening) without resigning or draw offers, how to resign,
+   offer or accept a draw.
 
 User part, in order:
 
@@ -38,7 +39,8 @@ User part, in order:
    opponent's last move, the halfmove clock, a warning when the current position
    has occurred before, this turn against the limit and turns left, a pending
    draw offer.
-2. **Legal moves** - every legal move label and the instruction to pick one. Both
+2. **Legal moves** - every legal move label and the instruction to pick one
+   (in the opening: that resigning and draw offers start with move 6). Both
    players get it, so it does not favor either; it turns a test of rule recall
    into a test of play.
 3. **Previous attempt** (retries only) - the rejected answer and why.
@@ -56,22 +58,27 @@ Templates live next to their game as plain text files
 (`games/chess_system_prompt.txt`, `games/chess_user_prompt.txt`) so they can be
 reworded without code changes. Both use the same `string.Template` placeholders:
 `$side`, `$opponent`, `$position`, `$legal_moves`, `$turn`, `$max_turns`,
-`$turns_left`, `$draw_offer` and `$previous_attempt` (empty except on retries).
-The draw-offer and previous-attempt sentences are worded in `Game.prompt`
-(`games/base.py`), because `string.Template` has no conditionals.
+`$turns_left`, `$opening_moves`, `$draw_offer`, `$choose_move` (the
+instruction to pick a move, which differs in the opening) and
+`$previous_attempt` (empty except on retries). The draw-offer, choose-move and
+previous-attempt sentences are worded in `Game.prompt` (`games/base.py`),
+because `string.Template` has no conditionals.
 
 - **Rule:** the prompt version recorded with a competition covers both parts, the
   wording in `Game.prompt`, the LLM answer format and the layout of the LLM
   message, so runs with different prompts are not compared by accident.
   `prompt_version` in `competition.py` hashes the LLM messages (`llm_message`)
-  rendered from sample prompts; the answer format sits at the system/user
-  boundary, so moving text between the parts changes the version too.
+  rendered from two sample prompts, an opening turn and a later one, so it covers
+  both answer formats; the answer format sits at the system/user boundary, so
+  moving text between the parts changes the version too.
 
 ## Answer formats
 
 All answers carry the same three things: an action (`move`, `resign`,
 `accept_draw`), a move when the action is `move`, and an optional draw offer made
-together with the move.
+together with the move. In a move-only turn (`TurnRequest.move_only`, the
+[opening](turns.md#opening)) every adapter asks for the move alone: the action and
+the draw offer are not part of the answer format at all.
 
 **LLM players** (`openai-completions` and `anthropic-messages` providers) use a
 PydanticAI `Agent` whose `output_type` is the answer model:
@@ -83,11 +90,18 @@ class TurnAnswer(BaseModel):
     offer_draw: bool = False
 ```
 
+In a move-only turn the run's output type is `MoveAnswer` (one field, `move`)
+instead, in the same output mode, and the adapter turns it into a `TurnAnswer`
+with action `move`.
+
 The adapter sends one user message and no PydanticAI `instructions`:
 `llm_message` in `players/llm.py` joins the system part, a short ANSWER FORMAT
-section naming the three fields, and the user part, in that order. The text that
-is the same every turn comes first, so a local server can reuse its cached
-prompt prefix.
+section naming the three fields (`MOVE_ONLY_ANSWER_FORMAT`, naming only `move`,
+in a move-only turn), and the user part, in that order. The text that
+is the same from turn to turn comes first, so a local server can reuse its cached
+prompt prefix. The answer format, and in every output mode the output schema,
+changes once, at a side's move 6 after the opening, so the cached prefix restarts
+once per game.
 
 - **Decision:** ollmpiada sends no system message to LLM players, on every API
   and in every output mode, so a request carries at most one: none in `tool` and
@@ -134,16 +148,17 @@ question is a `choice`:
 
 | Question | Criteria |
 | --- | --- |
-| `action` | `move`, `resign`, plus `accept_draw` only while an offer is pending |
+| `action` | `move`, `resign`, plus `accept_draw` only while an offer is pending; not asked in a move-only turn |
 | `move` | every legal move, keyed by its id (`e2e4`), described by its label (`e4`); replaced by `piece` and `move_<key>` past `max_options` (below) |
-| `offer_draw` | `yes`, `no` |
+| `offer_draw` | `yes`, `no`; not asked in a move-only turn |
 
 The response must contain each choice under its question name, either at the top
 level or inside `answers`, `results`, `result`, `output`, `data` or
 `predictions`, matching the client in the author's `decision-one-evals` project.
 With a single legal move no `move` question is asked, because a one-option
 question tells nothing and SystemOne templates refuse it; an answer `move` plays
-that move.
+that move. A move-only turn never reaches the player with a single legal move: the
+game master plays that move itself (see [opening](turns.md#opening)).
 
 - **Sensitive:** a chess position can have more than 200 legal moves, and a
   decision server may limit the options per question (Basal's chat template
@@ -152,8 +167,8 @@ that move.
   below; without it, a refused question is a transport error that stops the game.
   Moves are never silently dropped.
 - **Rule:** when the N legal moves exceed `max_options` L, the one query asks the
-  piece first. Its questions are `action`, `offer_draw`, `piece` and one
-  `move_<key>` per piece. `piece` ("Which piece do you move? Each option lists its
+  piece first. Its questions are `action`, `offer_draw` (both left out in a
+  move-only turn), `piece` and one `move_<key>` per piece. `piece` ("Which piece do you move? Each option lists its
   moves.") has one option per group from the game's `move_groups`, keyed by the
   group key and described by the group's move labels (`knight_g1`: `Nf3, Nh3`);
   `move_<key>` offers only that group's moves. A group with more than L moves

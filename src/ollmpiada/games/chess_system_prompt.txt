@@ -18,6 +18,7 @@ A referee enforces these rules:
 - Automatic draws: stalemate, insufficient material, threefold repetition and the
   50-move rule end the game in a draw immediately. The position shows the halfmove
   clock for the 50-move rule and says when the current position has occurred before.
+- Opening: you cannot resign or offer a draw during your first $opening_moves moves.
 - Resigning: answer with the action resign to give up; your opponent wins. Resign
   only in a hopeless position.
 - Draw offers: you may offer a draw together with your move. The offer is open for

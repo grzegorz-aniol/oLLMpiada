@@ -1,3 +1,4 @@
+import dataclasses
 import re
 import shutil
 
@@ -7,7 +8,14 @@ from rich.console import Console
 
 from ollmpiada.config import load_settings
 from ollmpiada.games import GAMES
-from ollmpiada.games.base import GameSetupError, IllegalMove, Outcome, PromptContext, Side
+from ollmpiada.games.base import (
+    OPENING_MOVES,
+    GameSetupError,
+    IllegalMove,
+    Outcome,
+    PromptContext,
+    Side,
+)
 from ollmpiada.games.chess_game import ADJUDICATION_WIN_CP, DARK_LAST, LIGHT_LAST
 
 game = GAMES["chess"]
@@ -303,24 +311,30 @@ def test_record_of_resigned_and_unfinished_games():
     assert '[Result "*"]' in game.record(state, None, ("a", "b"))
 
 
-def test_prompt_differs_between_sides_only_in_side_words():
+@pytest.mark.opening
+@pytest.mark.parametrize("turn", [2, OPENING_MOVES + 1], ids=["opening", "later"])
+def test_prompt_differs_between_sides_only_in_side_words(turn):
     state = play("e4", "e5")
     white = PromptContext(
         side=Side.FIRST,
         position=game.describe(state),
         legal_moves=list(game.legal_moves(state).values()),
-        turn=2,
+        turn=turn,
         max_turns=40,
-        draw_offered=True,
+        # No draw offer can be pending in the opening.
+        draw_offered=turn > OPENING_MOVES,
         rejection='"Ke3" is not a legal move in this position',
     )
     black = PromptContext(**{**white.__dict__, "side": Side.SECOND})
-    for part in ("system", "user"):
+    both = {("White", "Black"), ("Black", "White")}
+    # In the opening no draw offer is pending, so the user part never names the opponent.
+    expected = {"system": both, "user": both if turn > OPENING_MOVES else {("White", "Black")}}
+    for part, pairs in expected.items():
         white_words = re.findall(r"\w+", getattr(game.prompt(white), part))
         black_words = re.findall(r"\w+", getattr(game.prompt(black), part))
         assert len(white_words) == len(black_words)
         differing = {(w, b) for w, b in zip(white_words, black_words, strict=True) if w != b}
-        assert differing == {("White", "Black"), ("Black", "White")}
+        assert differing == pairs, part
 
 
 def sections(text: str) -> list[str]:
@@ -363,6 +377,28 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     assert sections(retry.user) == ["POSITION", "LEGAL MOVES", "PREVIOUS ATTEMPT"]
     assert retry.user.rstrip().endswith("Answer again with a legal move.")
     assert "illegal move Ke2" in retry.user
+
+
+@pytest.mark.opening
+def test_prompt_states_the_opening_rule_and_offers_resigning_only_after_it():
+    state = game.new_state()
+    ctx = PromptContext(
+        side=Side.SECOND,
+        position=game.describe(state),
+        legal_moves=list(game.legal_moves(state).values()),
+        turn=OPENING_MOVES,
+        max_turns=40,
+    )
+    later_ctx = dataclasses.replace(ctx, turn=OPENING_MOVES + 1)
+    assert ctx.move_only and not later_ctx.move_only
+    last_opening, later = game.prompt(ctx), game.prompt(later_ctx)
+    assert "you cannot resign or offer a draw during your first 5 moves" in last_opening.system
+    assert later.system == last_opening.system
+    assert (
+        "Choose exactly one move from this list; resigning and draw offers start with your "
+        "move 6." in last_opening.user
+    )
+    assert "Unless you resign or accept a draw, choose exactly one move" in later.user
 
 
 # --- adjudication at the turn limit (score mapping: test_game_master.py) ---

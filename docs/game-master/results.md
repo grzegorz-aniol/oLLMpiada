@@ -13,8 +13,8 @@ How a game ends, how the turn limit is adjudicated, and how statistics are count
 | Condition | Result | Reason recorded |
 | --- | --- | --- |
 | Checkmate | Win for the side that mates | `checkmate` |
-| Resignation | Win for the opponent | `resignation` |
-| Draw offer accepted | Draw | `draw agreed` |
+| Resignation (not in the [opening](turns.md#opening)) | Win for the opponent | `resignation` |
+| Draw offer accepted (offers start after the [opening](turns.md#opening)) | Draw | `draw agreed` |
 | Stalemate, insufficient material, 75-move rule, fivefold repetition | Draw | `stalemate`, `insufficient material`, `75-move rule`, `fivefold repetition` |
 | Threefold repetition, 50-move rule | Draw, claimed automatically by the game master | `threefold repetition`, `50-move rule` |
 | Turn limit reached (both sides made `max_turns` moves) | Adjudicated by the game: for chess a win for the side Stockfish sees at least 5 pawns ahead or with a forced mate, else a draw | `adjudication` |
@@ -71,10 +71,15 @@ effort (see [configuration](../configuration.md#model-fields)).
   shows how many games the turn limit decided.
 - **Thinking time** - wall-clock time of every model call, rejected attempts
   included, game master work excluded. Shown as total and average per move.
+- **Forced opening moves** - a [forced opening move](turns.md#opening), which the
+  game master plays without asking the player, counts as a move with no call: it
+  adds to `moves` but not to `calls`, `calls_without_usage`, thinking time or
+  tokens, so it lowers the per-move averages slightly.
 - **Tokens** - input, output and reasoning tokens from PydanticAI's usage for LLM
   players; from the response for decision players when it reports any, otherwise
-  shown as unknown, never as zero. A decision server that reports no output count
-  but a `total_tokens` (SystemOne sends only `prompt_tokens` and `total_tokens`)
+  shown as unknown, never as zero. A call that reported no usage counts in
+  `calls_without_usage`; totals that miss some calls show as `≥ n`. A decision
+  server that reports no output count but a `total_tokens` (SystemOne sends only `prompt_tokens` and `total_tokens`)
   gets `total_tokens` minus the input as its output, 0 when they match, because a
   decision model generates no text. Reasoning tokens are unknown on their own when
   a server reports usage without them (llama.cpp sends no

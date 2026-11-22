@@ -29,7 +29,8 @@ validation, with its time and usage, so a live view can count a game's requests
 and tokens while it runs, resignations and rejected answers included. Its
 `GameResult` holds the outcome (or the error of an aborted game), the final state
 and one `Turn` per answered turn with every attempt's raw answer, time, tokens and
-rejection reason; an aborted game keeps the attempts of its unfinished turn as
+rejection reason (a [forced opening move](#opening) is a `Turn` with no attempts);
+an aborted game keeps the attempts of its unfinished turn as
 an `aborted` turn. A retry's prompt quotes the rejected answer (up to 300
 characters) and the reason.
 
@@ -44,10 +45,43 @@ characters) and the reason.
   model plays the first side (White in chess) when *n* is odd. A competition with
   an odd number of games states that imbalance in its summary.
 
+## Opening
+
+- **Rule:** during each side's first `OPENING_MOVES` (5) moves, the first ten
+  plies of a game, a player can only move: it cannot resign or offer a draw, so no
+  draw offer can be pending to accept either. From White's sixth move on, every
+  action is available. The rule is the same for every player:
+  `PromptContext.move_only` (`games/base.py`) is true while the side's turn number
+  is at most `OPENING_MOVES`, the game master copies it into
+  `TurnRequest.move_only`, and each adapter then asks for a move alone (see
+  [answer formats](prompts.md#answer-formats)). The shared prompt states the rule
+  (see [prompts](prompts.md#prompts)). An answer that still resigns or offers a draw
+  in the opening is rejected like an illegal move. When the side to move has
+  exactly one legal move in the opening, the game master plays it itself without
+  asking the player: nothing is sent, no `AnswerReceived` is published, and the
+  `Turn` is a move with no attempts, so it counts as a move with no call, time or
+  tokens (see [statistics](results.md#statistics)). After the opening a player
+  with one legal move is still asked, because resigning and offering a draw are
+  real choices there.
+- **Decision:** the rule exists because a deterministic decision model can resign
+  every game at move 0. In the experiment of 2026-11-22, basal-2-max as White
+  answered the action question on the starting position with `resign`
+  (probability 0.72 against 0.28 for `move`) and lost all 78 of its White games by
+  resignation without a move, while it played normally as Black. Nobody has a
+  sound reason to resign or agree a draw in the first five moves, so not offering
+  either removes this failure mode at no cost.
+- **Decision:** the game master, not the adapter, plays a forced opening move,
+  for every player type. A decision model cannot be asked a question with a single
+  option (SystemOne templates refuse it; Basal's accepts 2 to 26), and treating
+  every player the same keeps the opening identical for both sides and the
+  statistics exact: no player is charged a call, time or tokens for a move it could
+  not choose.
+
 ## Validation and retries
 
 An answer is rejected when it does not match the format, the action is `move` with
-a missing or illegal move, or the action is `accept_draw` with no pending offer.
+a missing or illegal move, the action is `accept_draw` with no pending offer, or it
+resigns or offers a draw in the [opening](#opening).
 
 - **Rule:** a player gets three attempts per turn. The third rejection loses the
   game with reason `illegal answers`. Each rejection counts as an illegal attempt.

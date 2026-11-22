@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game, warm_up
-from ollmpiada.games.base import Game, Side
+from ollmpiada.games.base import Game, Side, first_full_move
 from ollmpiada.players.base import Player, TransportError, Usage
 from ollmpiada.players.llm import llm_message
 
@@ -151,14 +151,16 @@ CompetitionEvent = Event | CompetitionProgress | CompetitionFinished
 
 
 def prompt_version(game: Game) -> str:
-    """Hash of LLM messages rendered from sample prompts, so it covers both templates, every
-    wording branch in code, the LLM answer format and the message layout."""
+    """Hash of LLM messages rendered from sample prompts, an opening turn and a later one, so it
+    covers both templates, every wording branch in code, both LLM answer formats and the
+    message layout."""
     state = game.new_state()
-    plain = game.context(state, turn=1, max_turns=1)
-    retry = game.context(state, turn=1, max_turns=1, draw_offered=True, rejection="-")
+    later = first_full_move()
+    opening = game.context(state, turn=1, max_turns=later)
+    retry = game.context(state, turn=later, max_turns=later, draw_offered=True, rejection="-")
     # The answer format sits at the system/user boundary, so moving text between the parts
     # changes the hash.
-    text = repr((llm_message(game.prompt(plain)), llm_message(game.prompt(retry))))
+    text = repr(tuple(llm_message(game.prompt(c), move_only=c.move_only) for c in (opening, retry)))
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 

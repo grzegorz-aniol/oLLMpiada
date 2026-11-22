@@ -51,3 +51,11 @@ def models_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("OLLMPIADA_RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setenv("TEST_HOSTED_KEY", "secret")
     return path
+
+
+@pytest.fixture(autouse=True)
+def no_opening(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the opening off, so a script can resign or offer a draw on its first move; tests
+    of the opening rule itself are marked `opening`."""
+    if request.node.get_closest_marker("opening") is None:
+        monkeypatch.setattr("ollmpiada.games.base.OPENING_MOVES", 0)

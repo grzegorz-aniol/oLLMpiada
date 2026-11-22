@@ -11,8 +11,9 @@ from ollmpiada.game_master import (
     GameStarted,
     MoveMade,
     play_game,
+    start_request,
 )
-from ollmpiada.games.base import Outcome, Side
+from ollmpiada.games.base import OPENING_MOVES, Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer
 from tests.fakes import USAGE, Judged, ScriptedPlayer, unreadable
@@ -286,3 +287,77 @@ def test_every_answer_is_published_with_its_usage_before_validation():
     received = answers[0]
     assert (received.number, received.side, received.player) == (3, Side.FIRST, "white-model")
     assert (received.elapsed_s, received.usage) == (1.0, USAGE)
+
+
+# --- the opening: only moves during each side's first OPENING_MOVES moves ---
+
+OPENING = (["e4", "Nf3", "Bc4", "Nc3", "d3"], ["e5", "Nc6", "Bc5", "Nf6", "d6"])
+
+
+@pytest.mark.opening
+def test_opening_turns_are_move_only_for_both_sides_and_later_turns_are_not():
+    white_moves, black_moves = OPENING
+    result, white, black = run([*white_moves, offer("O-O")], [*black_moves, ACCEPT])
+    assert result.outcome == Outcome(None, "draw agreed")
+    assert len(result.turns) == 2 * OPENING_MOVES + 2
+    assert [r.move_only for r in white.requests] == [True] * OPENING_MOVES + [False]
+    assert [r.move_only for r in black.requests] == [True] * OPENING_MOVES + [False]
+    assert "Choose exactly one move" in black.requests[-2].prompt.user
+    assert "Unless you resign or accept a draw" in white.requests[-1].prompt.user
+
+
+@pytest.mark.opening
+@pytest.mark.parametrize("early", [RESIGN, offer("e4")], ids=["resign", "draw-offer"])
+def test_resignation_or_draw_offer_in_the_opening_is_rejected(early):
+    result, white, _ = run([early, "e4", RESIGN, RESIGN, RESIGN], ["e5"])
+    first = result.turns[0]
+    assert first.move == "e4"
+    assert first.attempts[0].rejection == (
+        f"resigning and draw offers start with your move {OPENING_MOVES + 1}; play a move"
+    )
+    assert "PREVIOUS ATTEMPT" in white.requests[1].prompt.user
+    # A player that keeps resigning in the opening loses on illegal answers, never by resigning.
+    assert result.outcome == Outcome(Side.SECOND, "illegal answers")
+
+
+@pytest.mark.opening
+def test_start_request_is_move_only_by_default_and_full_after_the_opening():
+    """The warm-up primes the opening turns; the probe also checks a turn after them."""
+    request = start_request(ChessGame(), max_turns=40)
+    assert request.move_only and not request.draw_offered
+    assert "Choose exactly one move" in request.prompt.user
+    later = start_request(ChessGame(), max_turns=40, turn=OPENING_MOVES + 1)
+    assert not later.move_only and len(later.legal_moves) == 20
+    assert "Unless you resign or accept a draw" in later.prompt.user
+
+
+# 1. e4 f6 2. Qh5+ leaves Black one legal move, g6, on its second move.
+FORCED_WHITE, FORCED_BLACK = ["e4", "Qh5+"], ["f6"]
+
+
+@pytest.mark.opening
+def test_forced_opening_move_is_played_by_the_game_master_without_asking_the_player():
+    events = []
+    result, _, black = run(
+        FORCED_WHITE, FORCED_BLACK, game=Judged(Cp(0)), max_turns=2, events=events
+    )
+    assert len(black.requests) == 1
+    forced = result.turns[3]
+    assert (forced.side, forced.action, forced.move, forced.attempts) == (
+        Side.SECOND,
+        "move",
+        "g6",
+        [],
+    )
+    black_events = [type(e) for e in events if getattr(e, "player", None) == "black-model"]
+    assert black_events == [AnswerReceived, MoveMade, MoveMade]
+    assert result.outcome == Outcome(None, "adjudication", "0 cp")
+
+
+@pytest.mark.opening
+def test_forced_move_after_the_opening_is_still_asked(monkeypatch):
+    monkeypatch.setattr("ollmpiada.games.base.OPENING_MOVES", 1)
+    result, _, black = run(FORCED_WHITE, [*FORCED_BLACK, RESIGN], game=Judged(Cp(0)), max_turns=2)
+    forced = black.requests[1]
+    assert len(forced.legal_moves) == 1 and not forced.move_only
+    assert result.outcome == Outcome(Side.FIRST, "resignation")

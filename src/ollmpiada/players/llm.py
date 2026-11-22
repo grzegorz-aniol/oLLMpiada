@@ -7,6 +7,7 @@ import anthropic
 import httpx2
 import openai
 import pydantic_ai
+from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput, PromptedOutput, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -34,23 +35,38 @@ exactly as listed under LEGAL MOVES, required when action is move); offer_draw
 (true to offer a draw together with your move, otherwise false).
 """
 
+MOVE_ONLY_ANSWER_FORMAT = """
+ANSWER FORMAT
+
+Answer with one field: move (your move exactly as listed under LEGAL MOVES).
+"""
+
+
+class MoveAnswer(BaseModel):
+    """The answer of a turn in which only a move is allowed (`TurnRequest.move_only`)."""
+
+    move: str
+
+
 # How PydanticAI asks for the answer: an output tool, the server's JSON schema mode, or the
 # schema in the instructions with the reply parsed from text (configuration docs).
-_OUTPUT_TYPES = {
-    "tool": TurnAnswer,
-    "native": NativeOutput(TurnAnswer),
-    "prompted": PromptedOutput(TurnAnswer),
+_OUTPUT_WRAPPERS = {
+    "tool": lambda answer_type: answer_type,
+    "native": NativeOutput,
+    "prompted": PromptedOutput,
 }
 
 
-def llm_message(prompt: Prompt) -> str:
+def llm_message(prompt: Prompt, *, move_only: bool = False) -> str:
     """The one user message an LLM player sends: rules, answer format, then the turn.
 
     No system message comes from ollmpiada, since some chat templates refuse a second one and
-    PydanticAI adds its own for prompted output. The text that is the same every turn goes
-    first, so a server can reuse its cached prefix.
+    PydanticAI adds its own for prompted output. The text that is the same from turn to turn
+    goes first, so a server can reuse its cached prefix; the answer format and output schema
+    change once, after the opening, which restarts that prefix once per game.
     """
-    return f"{prompt.system}{ANSWER_FORMAT}\n{prompt.user}"
+    answer_format = MOVE_ONLY_ANSWER_FORMAT if move_only else ANSWER_FORMAT
+    return f"{prompt.system}{answer_format}\n{prompt.user}"
 
 
 class LLMPlayer:
@@ -70,10 +86,12 @@ class LLMPlayer:
             settings or {}
         )
         self.name = name
+        wrap = _OUTPUT_WRAPPERS[output_mode]
+        self._move_only_output = wrap(MoveAnswer)
         # Output retries are off so every invalid answer reaches the game master to be counted.
         self._agent = Agent(
             model,
-            output_type=_OUTPUT_TYPES[output_mode],
+            output_type=wrap(TurnAnswer),
             retries={"output": 0},
             model_settings=settings,
         )
@@ -83,8 +101,13 @@ class LLMPlayer:
         start = time.perf_counter()
         with capture_run_messages() as messages:
             try:
-                run = await self._agent.run(llm_message(request.prompt))
+                run = await self._agent.run(
+                    llm_message(request.prompt, move_only=request.move_only),
+                    output_type=self._move_only_output if request.move_only else None,
+                )
                 answer = run.output
+                if isinstance(answer, MoveAnswer):
+                    answer = TurnAnswer(action="move", move=answer.move)
             except UnexpectedModelBehavior as e:
                 format_error = _describe(e)
             except ModelAPIError as e:

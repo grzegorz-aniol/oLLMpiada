@@ -115,7 +115,8 @@ progress:
 - `game-NNN.json` - result, reason, `score` (the evaluation an
   [adjudicated](game-master/results.md#end-of-game) game was judged by, such as
   `"+612 cp"`; `null` otherwise), side names and every turn with its attempts
-  (raw answer, time, tokens, rejection reason).
+  (raw answer, time, tokens, rejection reason; an empty list for a
+  [forced opening move](game-master/turns.md#opening)).
 
 `ollmpiada show` reads `competition.json` back with `load_state`.
 
@@ -126,7 +127,7 @@ argparse subcommands; Rich renders everything the user sees.
 | Command | What it does |
 | --- | --- |
 | `ollmpiada models` | Lists configured models with API, reasoning efforts and availability |
-| `ollmpiada probe <model>[@effort]` | Sends one opening-position turn and prints the parsed answer, time and tokens |
+| `ollmpiada probe <model>[@effort]` | Sends two turns in the opening position, one per answer format: an [opening](game-master/turns.md#opening) turn (move only) and a move-6 turn (full answer); prints each parsed answer, time and tokens and exits 0 only when both match their format |
 | `ollmpiada run <a>[@effort] <b>[@effort]` | Plays a competition; flags `--game` (default `chess`), `--games`, `--max-turns`, `--mode visual\|background` |
 | `ollmpiada show <run-dir>` | Prints the results and statistics of a saved competition |
 

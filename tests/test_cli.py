@@ -85,32 +85,53 @@ def probe_with(monkeypatch, models_file):
     return run
 
 
-def test_probe_prints_parsed_answer_time_and_tokens(probe_with, capsys):
-    code, player, created = probe_with("Nf3")
+@pytest.mark.opening
+def test_probe_checks_the_opening_and_the_full_answer_format(probe_with, capsys):
+    code, player, created = probe_with("Nf3", "e4")
     out = capsys.readouterr().out
     assert code == 0
     assert created == [("local-llm@high", 120)]
-    assert "legal (Nf3)" in out and "1.00 s" in out and "in 100, out 10" in out
-    request = player.requests[0]
-    assert len(request.legal_moves) == 20 and not request.draw_offered
-    assert "as White" in request.prompt.system and "move 1 of 50" in request.prompt.user
+    assert "Opening turn (move only)" in out and "Move 6 (full answer)" in out
+    assert "legal (Nf3)" in out and "legal (e4)" in out
+    assert "1.00 s" in out and "in 100, out 10" in out
+    opening, later = player.requests
+    assert opening.move_only and not later.move_only
+    for request in (opening, later):
+        assert len(request.legal_moves) == 20 and not request.draw_offered
+        assert "as White" in request.prompt.system
+    assert "move 1 of 50" in opening.prompt.user and "move 6 of 50" in later.prompt.user
 
 
 def test_probe_reports_an_illegal_move(probe_with, capsys):
-    code, _, _ = probe_with("e5")
+    code, _, _ = probe_with("e5", "e4")
     assert code == 0
     assert "illegal: 'e5' is not a legal move" in capsys.readouterr().out
 
 
-def test_probe_fails_on_a_format_error(probe_with, capsys):
-    code, _, _ = probe_with(unreadable("I like e4"))
+@pytest.mark.opening
+@pytest.mark.parametrize(
+    "script",
+    [(unreadable("I like e4"), "e4"), ("e4", unreadable("I like e4"))],
+    ids=["move-only-turn", "full-turn"],
+)
+def test_probe_fails_on_a_format_error_in_either_turn(probe_with, capsys, script):
+    code, player, _ = probe_with(*script)
     out = capsys.readouterr().out
     assert code == 1 and "format error" in out and "I like e4" in out
+    assert [r.move_only for r in player.requests] == [True, False]
 
 
 def test_probe_fails_on_a_transport_error(probe_with, capsys):
     code, _, _ = probe_with(TransportError("connection refused"))
     assert code == 1 and "connection refused" in capsys.readouterr().out
+
+
+@pytest.mark.opening
+def test_probe_keeps_the_first_turn_when_the_second_fails_to_connect(probe_with, capsys):
+    code, _, _ = probe_with("Nf3", TransportError("connection refused"))
+    out = capsys.readouterr().out
+    assert code == 1 and "legal (Nf3)" in out and "connection refused" in out
+    assert "Move 6 (full answer)" not in out
 
 
 def test_probe_rejects_an_unknown_model(models_file, capsys):

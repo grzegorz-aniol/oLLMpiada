@@ -25,6 +25,9 @@ class TurnRequest:
     draw_offered: bool = False
     move_groups: dict[str, dict[str, str]] = field(default_factory=dict)
     """The legal moves as the game groups them (`Game.move_groups`); empty means one group."""
+    move_only: bool = False
+    """Only a move is allowed (the opening, `PromptContext.move_only`): the answer format offers
+    no resignation and no draw offer."""
 
 
 @dataclass(frozen=True)

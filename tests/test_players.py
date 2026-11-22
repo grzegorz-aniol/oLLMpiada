@@ -8,21 +8,31 @@ import random
 import httpx
 import httpx2
 import pytest
+from chess.engine import Cp
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from ollmpiada.config import load_models
-from ollmpiada.games.base import Prompt
+from ollmpiada.game_master import GameResult, play_game
+from ollmpiada.games.base import Outcome, Prompt, Side
+from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer, TurnRequest, Usage
 from ollmpiada.players.decision import DecisionPlayer
-from ollmpiada.players.llm import ANSWER_FORMAT, LLMPlayer, create_llm_player, llm_message
-from tests.fakes import ScriptedPlayer, unreadable
+from ollmpiada.players.llm import (
+    ANSWER_FORMAT,
+    MOVE_ONLY_ANSWER_FORMAT,
+    LLMPlayer,
+    create_llm_player,
+    llm_message,
+)
+from tests.fakes import Judged, ScriptedPlayer, unreadable
 
 PROMPT = Prompt(system="RULES\n", user="POSITION\n")
 REQUEST = TurnRequest(prompt=PROMPT, legal_moves={"e2e4": "e4", "g1f3": "Nf3"})
+MOVE_ONLY = dataclasses.replace(REQUEST, move_only=True)
 MESSAGE_SENT = llm_message(PROMPT)
 
 
@@ -142,6 +152,64 @@ def test_llm_sends_rules_answer_format_and_turn_as_one_user_message_without_inst
     assert request.instructions is None
     assert [part.content for part in request.parts] == [MESSAGE_SENT]
     assert MESSAGE_SENT == "RULES\n" + ANSWER_FORMAT + "\nPOSITION\n"
+
+
+def test_llm_move_only_turn_asks_for_a_move_alone():
+    requests = []
+
+    def capture(messages, info):
+        requests.append(messages[-1])
+        return tool_reply({"move": "Nf3"})(messages, info)
+
+    player, seen = function_player(capture)
+    response = play(player, MOVE_ONLY)
+    assert response.answer == TurnAnswer(action="move", move="Nf3")
+    assert [part.content for part in requests[0].parts] == [
+        "RULES\n" + MOVE_ONLY_ANSWER_FORMAT + "\nPOSITION\n"
+    ]
+    assert "resign" not in MOVE_ONLY_ANSWER_FORMAT and "draw" not in MOVE_ONLY_ANSWER_FORMAT
+    (tool,) = seen[0].output_tools
+    assert set(tool.parameters_json_schema["properties"]) == {"move"}
+
+
+def test_llm_move_only_turn_cannot_resign():
+    player, _ = function_player(tool_reply({"action": "resign"}))
+    response = play(player, MOVE_ONLY)
+    assert response.answer is None and response.format_error
+
+
+@pytest.mark.parametrize("output_mode", ["native", "prompted"])
+def test_llm_move_only_answer_is_parsed_from_the_reply_text(output_mode):
+    player, seen = function_player(text_reply('{"move": "Nf3"}'), output_mode=output_mode)
+    assert play(player, MOVE_ONLY).answer == TurnAnswer(action="move", move="Nf3")
+    assert seen[0].output_tools == []
+    schema = seen[0].model_request_parameters.output_object.json_schema
+    assert set(schema["properties"]) == {"move"}
+
+
+def answer_fields(info: AgentInfo) -> set[str]:
+    return set(info.output_tools[0].parameters_json_schema["properties"])
+
+
+@pytest.mark.opening
+def test_llm_game_asks_for_moves_alone_until_move_six_then_for_the_full_answer():
+    white_moves = iter(["e4", "Nf3", "Bc4", "Nc3", "d3"])
+
+    def reply(messages, info):
+        if answer_fields(info) == {"move"}:
+            return tool_reply({"move": next(white_moves)})(messages, info)
+        return tool_reply({"action": "resign"})(messages, info)
+
+    white, seen = function_player(reply)
+    black = ScriptedPlayer("black", ["e5", "Nc6", "Bc5", "Nf6", "d6"])
+    result = asyncio.run(
+        play_game(ChessGame(), (white, black), max_turns=50, number=1, publish=lambda e: None)
+    )
+    assert result.outcome == Outcome(Side.SECOND, "resignation")
+    assert [answer_fields(info) for info in seen] == [{"move"}] * 5 + [
+        {"action", "move", "offer_draw"}
+    ]
+    assert [t.move for t in result.turns[::2]] == ["e4", "Nf3", "Bc4", "Nc3", "d3", None]
 
 
 def test_llm_without_effort_sends_none():
@@ -636,6 +704,41 @@ def test_decision_offers_accept_draw_only_while_pending_and_sends_token(models):
     assert "accept_draw" in json.loads(sent[0].content)["questions"]["action"]["criteria"]
 
 
+def test_decision_move_only_turn_asks_only_for_the_move(models):
+    sent = []
+    response = play(decision_player(models, scripted({"move": "g1f3"}, sent)), MOVE_ONLY)
+    assert response.answer == TurnAnswer(action="move", move="g1f3")
+    assert set(sent[0]) == {"move"}
+
+
+def test_decision_move_only_turn_ignores_an_unasked_resignation(models):
+    body = {"action": "resign", "move": "e2e4"}
+    response = play(decision_player(models, scripted(body, [])), MOVE_ONLY)
+    assert response.answer == TurnAnswer(action="move", move="e2e4")
+
+
+def play_forced_opening(black) -> GameResult:
+    """1. e4 f6 2. Qh5+ g6, where g6 is Black's only legal move, then adjudication."""
+    white = ScriptedPlayer("white", ["e4", "Qh5+"])
+    return asyncio.run(play_game(Judged(Cp(0)), (white, black), max_turns=2))
+
+
+@pytest.mark.opening
+def test_decision_server_is_not_asked_for_a_forced_opening_move(models):
+    sent = []
+    result = play_forced_opening(decision_player(models, scripted({"move": "f7f6"}, sent)))
+    assert len(sent) == 1 and set(sent[0]) == {"move"}
+    assert [t.move for t in result.turns] == ["e4", "f6", "Qh5+", "g6"]
+
+
+@pytest.mark.opening
+def test_llm_is_not_asked_for_a_forced_opening_move():
+    black, seen = function_player(tool_reply({"move": "f6"}))
+    result = play_forced_opening(black)
+    assert len(seen) == 1
+    assert [t.move for t in result.turns] == ["e4", "f6", "Qh5+", "g6"]
+
+
 @pytest.mark.parametrize(("token", "authorization"), [(None, None), ("tok", "Bearer tok")])
 def test_decision_sends_provider_headers(models, token, authorization):
     sent = []
@@ -838,6 +941,15 @@ def test_decision_resign_needs_no_piece_or_move_answer(models):
     player = decision_player(models, scripted({"action": "resign"}, sent), max_options=8)
     assert play(player, GROUPED).answer == TurnAnswer(action="resign")
     assert len(sent) == 1
+
+
+def test_decision_move_only_turn_asks_the_piece_without_action_or_draw_offer(models):
+    sent = []
+    body = {"piece": "knight_g1", "move_knight_g1": "g1h3"}
+    request = dataclasses.replace(GROUPED, move_only=True)
+    response = play(decision_player(models, scripted(body, sent), max_options=8), request)
+    assert response.answer == TurnAnswer(action="move", move="g1h3")
+    assert set(sent[0]) == {"piece", "move_queen_d1", "move_knight_g1"}
 
 
 @pytest.mark.parametrize("move_groups", [None, {"king_e1": KING}], ids=["ungrouped", "grouped"])

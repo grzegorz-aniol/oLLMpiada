@@ -134,9 +134,11 @@ def _chunks(moves: dict[str, str], limit: int) -> list[dict[str, str]]:
 
 
 def _questions(request: TurnRequest, groups: dict[str, dict[str, str]]) -> dict[str, dict]:
-    """`action` and `offer_draw`, then either one `move` question or the piece question
-    with one move question per group; a single move needs no question of its own, since a
-    one-option question tells nothing and SystemOne templates refuse it."""
+    """`action` and `offer_draw` (not in a move-only turn), then either one `move` question
+    or the piece question with one move question per group; a single move needs no question
+    of its own, since a one-option question tells nothing and SystemOne templates refuse it.
+    A move-only turn always has several legal moves: the game master plays a single one itself
+    (docs/game-master/turns.md#opening)."""
     questions = _turn_questions(request)
     if not groups:
         if len(request.legal_moves) > 1:
@@ -157,10 +159,12 @@ def _decide(
     groups: dict[str, dict[str, str]],
 ) -> TurnAnswer:
     """Raises ValueError for an answer that does not match the questions asked."""
-    action = _selected(answers, "action", questions["action"]["criteria"])
-    if action != "move":
-        return TurnAnswer(action=action)
-    offer_draw = _selected(answers, "offer_draw", questions["offer_draw"]["criteria"]) == "yes"
+    offer_draw = False
+    if not request.move_only:
+        action = _selected(answers, "action", questions["action"]["criteria"])
+        if action != "move":
+            return TurnAnswer(action=action)
+        offer_draw = _selected(answers, "offer_draw", questions["offer_draw"]["criteria"]) == "yes"
     if groups:
         piece = _selected(answers, PIECE, groups)
         name, moves = _move_name(piece), groups[piece]
@@ -176,6 +180,8 @@ def _move_name(piece: str) -> str:
 
 
 def _turn_questions(request: TurnRequest) -> dict[str, dict]:
+    if request.move_only:
+        return {}
     actions = {"move": "Make a move", "resign": "Resign the game"}
     if request.draw_offered:
         actions["accept_draw"] = "Accept the opponent's draw offer"

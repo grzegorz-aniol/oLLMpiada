@@ -32,6 +32,13 @@ uv run pytest tests/test_x.py -k name   # one test
   each player once to [warm it up](architecture.md#competition-runner) before the
   first game, so a competition script starts with `WARM_UP` (the test helpers
   prepend it) unless the test is about the warm-up.
+- **Rule:** tests run with the [opening](game-master/turns.md#opening) turned off
+  (`OPENING_MOVES` set to 0 by the autouse fixture `no_opening` in
+  `tests/conftest.py`), so a script can resign or offer a draw on its first move.
+  Only `games/base.py` reads the constant, at call time, so patching it there
+  turns the opening off everywhere.
+  A test of the opening rule itself is marked `@pytest.mark.opening` and runs
+  with the real value.
 - **Rule: no engine in tests.** Turn-limit adjudication is tested with `Judged`
   in `tests/fakes.py`, chess whose `evaluate` returns prepared scores, and CLI
   tests replace `ChessGame.session` so no engine starts. One test runs the real
