@@ -43,9 +43,8 @@ of each finished game and per-player statistics:
 The rules of refereeing, prompting and scoring are owned by
 [game master](game-master/README.md).
 
-- **Decision:** the MVP has a terminal UI, not a web UI. One command starts a
-  competition with no server to run or browser to open, and the same command can
-  be scripted. A web UI can come later as another consumer of the runner's events.
+- **Decision:** the app has a terminal UI only. One command starts a competition
+  with nothing else to run, and the same command can be scripted.
 - **Decision:** one competition runs at a time, its games one after another.
   Parallel games are a later option, not part of the MVP.
 - **Decision:** results are written to disk per competition (`.local/runs/`), so a

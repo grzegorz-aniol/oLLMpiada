@@ -73,8 +73,7 @@ request (the CLI sends one on Ctrl+C).
   decides whether the live view renders the board; statistics and status update
   live in both.
 - **Rule:** the runner knows nothing about the terminal. It only publishes events,
-  so a later front end (a web UI, for example) subscribes to the same events
-  without changes to the runner.
+  and the live view and the plain output for scripts subscribe to them.
 - **Rule:** before the first game the runner warms up each player with one real
   call: the opening turn of a new game through the player's own adapter, so a
   server that loads models on demand (llama.cpp, a proxy) has the model ready and
@@ -191,13 +190,13 @@ and the odd-game imbalance) and `PlainOutput`. `show` reuses the same tables.
 
 ## Code map
 
-Planned layout; replace this note with real entries as the modules land.
-
 - `src/ollmpiada/__init__.py` - `main()`: load `.env`, configure logging, run the CLI.
 - `src/ollmpiada/cli.py` - argparse subcommands `models`, `probe`, `run`, `show`.
 - `src/ollmpiada/config.py` - settings, model config models and loader.
-- `src/ollmpiada/games/` - `base.py` (game interface, outcome types) and
-  one module per game (`chess_game.py`, prompt templates beside it).
+- `src/ollmpiada/games/` - `__init__.py` (`GAMES`, the registry by name for
+  `--game`), `base.py` (game interface, side, outcome, prompt types and the
+  opening rule) and one module per game with its two prompt templates beside it
+  (`chess_game.py`, `chess_system_prompt.txt`, `chess_user_prompt.txt`).
 - `src/ollmpiada/players/` - `__init__.py` (`create_player` from a
   `<id>[@effort]` name), `base.py` (player interface, answer and usage types),
   `llm.py`, `decision.py`.
@@ -205,6 +204,11 @@ Planned layout; replace this note with real entries as the modules land.
 - `src/ollmpiada/competition.py` - runner, statistics, events, persistence.
 - `src/ollmpiada/tui.py` - Rich live view, results and statistics tables,
   plain output for scripts.
-- `config/models.json` - providers and models.
+- `config/models.json` - providers and models; gitignored, since it is each
+  user's own setup (format in [configuration](configuration.md#model-config)).
+- `.env.example` - the environment variables to copy into `.env`.
+- `tests/` - test modules by area (`test_chess.py`, `test_game_master.py`, ...),
+  `fakes.py` (scripted fake players) and `test_docs.py` (runs the docs check); see [testing](testing.md).
+- `scripts/check_docs.py` - the docs link and reachability check.
 - `.local/runs/` - competition results, gitignored with the rest of `.local/`.
 - `docs/images/` - images for the README and docs, as WebP sized for the page.

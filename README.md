@@ -125,8 +125,8 @@ field, its validation and the reasoning behind it are in
 
 ## Status
 
-Work in progress towards the MVP: `models`, `probe`, `run` and `show` work; the
-end-to-end check with real models is still to do.
+Chess is complete: `models`, `probe`, `run` and `show` work with real models.
+Next: bridge card play.
 
 ## Documentation
 
