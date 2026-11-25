@@ -32,15 +32,80 @@ command runs unattended from scripts, and every competition is saved to
 `.local/runs/`.
 
 Each game is a separate module behind one interface, so games can be added
-without touching the referee or the terminal UI. In bridge one model declares and
-the other defends a contract picked from the deal by a fixed rule, with no
-bidding; every deal is played twice with the pairs swapped, and the models are
-compared by the tricks they take
-([bridge rules](docs/game-master/bridge.md)).
+without touching the referee or the terminal UI; the
+[supported games](#supported-games) are chess and contract bridge card play.
 
 Players are LLMs behind an OpenAI chat-completions or Anthropic Messages API
 (through PydanticAI) or decision models behind the SystemOne API. This is an
 experiment, not a production app.
+
+## Supported games
+
+Each game is summarized under the same headings. The linked documents own the
+rules; this section only says what is played and what is left out.
+
+### Chess
+
+- **Players:** two models, White and Black. The colors swap every game: the
+  first model named plays White in odd-numbered games.
+- **Start:** the standard starting position, in every game.
+- **Legal play:** standard chess. Each turn a model moves, resigns, offers a
+  draw together with its move, or accepts a pending offer. In each side's first
+  5 moves it can only move ([opening](docs/game-master/turns.md#opening)).
+- **How a game ends:** checkmate; resignation; an accepted draw offer; an
+  automatic draw by stalemate or insufficient material, or by threefold
+  repetition or the 50-move rule, which the game master claims as soon as they
+  happen; or a third rejected answer in one turn, which loses. A game still
+  running when both sides have made `--max-turns` moves (default 50) is
+  adjudicated by Stockfish: a side at least 5 pawns ahead, or with a forced
+  mate, wins, anything else is a draw.
+- **Result and points:** win, loss or draw, with no points. Games adjudicated
+  at the turn limit are counted apart from games decided on the board.
+- **Hidden information:** none; both models see the whole board.
+- **Not supported:** variants and other starting positions; a chess clock
+  (thinking time is recorded, never limited by the rules); adjudication before
+  the turn limit; engines or humans as players
+  ([non-goals](docs/product.md#non-goals)).
+- **Record:** one PGN file per game, with the reason in its `Termination` tag
+  and, for an adjudicated game, the Stockfish score as a closing comment.
+- **Rules:** [end of game](docs/game-master/results.md#end-of-game),
+  [turns and retries](docs/game-master/turns.md) and
+  [statistics](docs/game-master/results.md#statistics).
+
+### Bridge
+
+- **Players:** two models, each playing both seats of a pair. At each table one
+  model plays North-South (the declarer South and dummy North) and the other
+  East-West (both defenders). Every deal, a *board*, is played at two tables in
+  consecutive games with the pairs swapped, so each model declares and defends
+  every deal once. A competition therefore plays an even number of games, and
+  `run` warns when it plays fewer than 8 boards.
+- **Start:** a deal derived from `--seed`, so a saved seed replays the same
+  deals, and a contract a fixed rule picks from it: the pair with more
+  high-card points declares, in its longest suit of at least 8 cards or else
+  no trumps, at a level set by its points. The table is turned so the declarer
+  sits South.
+- **Legal play:** standard card play. West leads first, then dummy is faced.
+  A seat follows suit when it can; the highest trump wins the trick, else the
+  highest card of the suit led, and the winner leads next. Every answer is one
+  card, and the game master plays a seat's only legal card itself.
+- **How a game ends:** after all 13 tricks, or at a third rejected answer in
+  one turn, when the opponents take every trick not yet complete. There is no
+  turn limit: `run` rejects `--max-turns`.
+- **Result and points:** a win for North-South when the contract is made
+  (`made`), else for East-West (`down`); never a draw. Points are the tricks
+  each pair took, and `run` and `show` print a board table that compares the
+  two tables of each board.
+- **Hidden information:** each turn shows only what the seat to play may
+  know: its own hand (the declarer's when dummy plays), dummy after the opening
+  lead, the contract and the cards played. A defender never sees its partner's
+  hand, even though one model plays both defending seats.
+- **Not supported:** bidding; doubles and redoubles; vulnerability; scoring by
+  contract points, IMPs or matchpoints (tables are compared by tricks);
+  claims, resigning and draw offers.
+- **Record:** one PBN file per table; both tables of a board carry the same
+  board number and deal.
+- **Rules:** [bridge](docs/game-master/bridge.md).
 
 ## Quick start
 

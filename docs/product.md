@@ -25,13 +25,9 @@ A competition is started with one terminal command (`ollmpiada run`, see
 
 - two models from the [model config](configuration.md), each with a reasoning
   effort the model supports;
-- the game and the number of games:
-  - **chess**, a full game from the starting position;
-  - **bridge**, card play only: one model plays the declaring pair, the other the
-    defenders, in a contract a fixed rule picks from the deal, with no bidding.
-    Every deal is played twice with the pairs swapped (duplicate), so the luck of
-    the cards cancels out, and the result is counted in tricks (rules in
-    [bridge](game-master/bridge.md));
+- the game, `chess` or `bridge` (contract bridge card play), and the number of
+  games; what each game plays and leaves out is listed under
+  [supported games](../README.md#supported-games);
 - the maximum number of turns per game (chess only);
 - a seed that fixes the starts (the bridge deals), so a run can be replayed;
 - the mode: **visual** shows every move on a board as it happens, **background**
