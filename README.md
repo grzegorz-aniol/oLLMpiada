@@ -14,7 +14,8 @@ other, under defined rules.
 It continues my earlier project RivaLLMatch, where one model invented tasks for
 the other. oLLMpiada introduces defined game rules instead.
 
-Chess comes first, as the easiest game to implement. Other games can follow,
+Chess came first, as the easiest game to implement, then contract bridge card
+play, a game of hidden information played in pairs. Other games can follow,
 including multiplayer ones, and so can evaluating agents, a harness plus a model,
 rather than bare models only. In the future the project may also evolve into an
 engine for self-optimizing solutions: nothing stops the same model or agent from
@@ -30,8 +31,12 @@ counted separately), thinking time, token usage and illegal attempts. The same
 command runs unattended from scripts, and every competition is saved to
 `.local/runs/`.
 
-Each game is a separate module behind one interface, so games other than chess
-can be added without touching the referee or the terminal UI.
+Each game is a separate module behind one interface, so games can be added
+without touching the referee or the terminal UI. In bridge one model declares and
+the other defends a contract picked from the deal by a fixed rule, with no
+bidding; every deal is played twice with the pairs swapped, and the models are
+compared by the tricks they take
+([bridge rules](docs/game-master/bridge.md)).
 
 Players are LLMs behind an OpenAI chat-completions or Anthropic Messages API
 (through PydanticAI) or decision models behind the SystemOne API. This is an
@@ -46,6 +51,7 @@ cp .env.example .env            # fill tokens for providers that need them
 $EDITOR config/models.json      # providers and models available for competitions
 uv run ollmpiada models         # configured models and whether they are available
 uv run ollmpiada run qwen3-8b@low claude-haiku@none --games 4
+uv run ollmpiada run qwen3-8b@low claude-haiku@none --game bridge --games 4
 ```
 
 ## Configuring models
@@ -126,7 +132,8 @@ field, its validation and the reasoning behind it are in
 ## Status
 
 Chess is complete: `models`, `probe`, `run` and `show` work with real models.
-Next: bridge card play.
+Bridge card play runs end to end with scripted players; the first runs with real
+models are next.
 
 ## Documentation
 

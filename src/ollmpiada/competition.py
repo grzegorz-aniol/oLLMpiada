@@ -11,10 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameResult, play_game, warm_up
-from ollmpiada.games.base import Game, Side, first_full_move
+from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameMaster, GameResult
+from ollmpiada.games.base import SAMPLE_SEED, Game, Side, first_full_move
 from ollmpiada.players.base import Player, TransportError, Usage
-from ollmpiada.players.llm import llm_message
+from ollmpiada.players.llm import answer_type, llm_message
 
 Status = Literal["warming up", "running", "finished", "aborted", "stopped"]
 
@@ -41,6 +41,8 @@ class PlayerStats:
     calls_without_usage: int = 0
     calls_without_reasoning: int = 0
     illegal_attempts: int = 0
+    points: int | None = None
+    """The sum of the player's side's `Outcome.points`; None until a game with points counts."""
 
     @property
     def tokens_known(self) -> bool:
@@ -70,6 +72,8 @@ class PlayerStats:
             self.adjudicated_losses += 1
         else:
             self.losses += 1
+        if outcome.points is not None:
+            self.points = (self.points or 0) + outcome.points[0 if side is Side.FIRST else 1]
         for turn in result.turns:
             if turn.side is not side:
                 continue
@@ -102,11 +106,14 @@ class GameSummary:
     """Player names in side order."""
     winner: str | None
     result: str
-    """`1-0`, `0-1`, `1/2-1/2`, or `aborted`."""
+    """The points in side order (`9-4`) for a game with points, else `1-0`, `0-1` or
+    `1/2-1/2`; `aborted` for an aborted game."""
     reason: str
     moves: int
     score: str | None = None
     """What an adjudicated game was judged by (`Outcome.score`)."""
+    points: tuple[int, int] | None = None
+    """`Outcome.points`: what each side scored, in side order."""
 
     @classmethod
     def of(cls, result: GameResult) -> GameSummary:
@@ -114,11 +121,21 @@ class GameSummary:
         outcome = result.outcome
         if outcome is None:
             return cls(result.number, result.players, None, "aborted", result.error or "", moves)
-        winner = outcome.winner
-        scoreline = {Side.FIRST: "1-0", Side.SECOND: "0-1", None: "1/2-1/2"}[winner]
+        winner, points = outcome.winner, outcome.points
+        if points is None:
+            scoreline = {Side.FIRST: "1-0", Side.SECOND: "0-1", None: "1/2-1/2"}[winner]
+        else:
+            scoreline = f"{points[0]}-{points[1]}"
         name = None if winner is None else result.players[0 if winner is Side.FIRST else 1]
         return cls(
-            result.number, result.players, name, scoreline, outcome.reason, moves, outcome.score
+            result.number,
+            result.players,
+            name,
+            scoreline,
+            outcome.reason,
+            moves,
+            outcome.score,
+            points,
         )
 
 
@@ -130,7 +147,10 @@ class CompetitionState:
     side_names: tuple[str, str]
     players: tuple[str, str]
     games: int
-    max_turns: int
+    max_turns: int | None
+    """None for a game without a turn limit (`Game.turn_limit`)."""
+    seed: int | None
+    """Game n starts from `game_seed(seed, n)`; None when read from a file without a seed."""
     stats: dict[str, PlayerStats]
     results: list[GameSummary] = field(default_factory=list)
     status: Status = "running"
@@ -150,47 +170,80 @@ class CompetitionFinished:
 CompetitionEvent = Event | CompetitionProgress | CompetitionFinished
 
 
+def start_number(number: int) -> int:
+    """The start game `number` plays, counted from 1: games 2k-1 and 2k share start k, and
+    sides alternate between them, so each pair plays the same start once from each side (a
+    duplicate pair)."""
+    return (number + 1) // 2
+
+
+def game_seed(seed: int, number: int) -> int:
+    """The seed of game `number`'s start; the first start takes `seed` itself."""
+    return seed + start_number(number) - 1
+
+
 def prompt_version(game: Game) -> str:
-    """Hash of LLM messages rendered from sample prompts, an opening turn and a later one, so it
-    covers both templates, every wording branch in code, both LLM answer formats and the
-    message layout."""
-    state = game.new_state()
+    """Hash of what an LLM reads in sample turns, an opening turn and a later one: the message
+    and the output schema of each, so it covers both templates, every wording branch in code,
+    both LLM answer formats, the schema descriptions and the message layout."""
+    state = game.new_state(SAMPLE_SEED)
     later = first_full_move()
-    opening = game.context(state, turn=1, max_turns=later)
-    retry = game.context(state, turn=later, max_turns=later, draw_offered=True, rejection="-")
+    max_turns = later if game.turn_limit else None
+    opening = game.context(state, turn=1, max_turns=max_turns)
+    retry = game.context(state, turn=later, max_turns=max_turns, draw_offered=True, rejection="-")
     # The answer format sits at the system/user boundary, so moving text between the parts
     # changes the hash.
-    text = repr(tuple(llm_message(game.prompt(c), move_only=c.move_only) for c in (opening, retry)))
+    text = repr(
+        tuple(
+            (llm_message(game.prompt(c)), json.dumps(answer_type(c.move_only).model_json_schema()))
+            for c in (opening, retry)
+        )
+    )
     return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+class CompetitionSetupError(ValueError):
+    """The competition's settings break one of its rules; the message says which."""
 
 
 class Competition:
     def __init__(
         self,
-        game: Game,
+        master: GameMaster,
         players: tuple[Player, Player],
         *,
         games: int,
-        max_turns: int,
+        max_turns: int | None,
         runs_dir: Path,
+        seed: int = 0,
         publish: Callable[[CompetitionEvent], None] = lambda event: None,
         backoff_s: tuple[float, ...] = TRANSPORT_BACKOFF_S,
     ) -> None:
-        self._game = game
+        self._master = master
+        game = master.game
         self._players = players
         self._publish = publish
         self._backoff_s = backoff_s
+        self._seed = seed
         self._current: asyncio.Task | None = None
         self._stop_requested = False
         names = (players[0].name, players[1].name)
         if names[0] == names[1]:
-            raise ValueError(f"both players are named {names[0]!r}; statistics need two names")
+            raise CompetitionSetupError(
+                f"both players are named {names[0]!r}; statistics need two names"
+            )
+        if games % 2 and game.duplicate:
+            raise CompetitionSetupError(
+                f"{game.name} plays every start twice, once from each side; "
+                f"pick an even number of games, not {games}"
+            )
         self.state = CompetitionState(
             game=game.name,
             side_names=game.side_names,
             players=names,
             games=games,
             max_turns=max_turns,
+            seed=seed,
             stats={name: PlayerStats(name) for name in names},
         )
         self._prompt_version = prompt_version(game)
@@ -225,16 +278,19 @@ class Competition:
         return self.state
 
     async def _warm_up(self) -> None:
-        """Warm every player up; the first player moves first in game 1, so it goes last and a
-        server that keeps one model loaded at a time still holds it when the game starts.
+        """Warm every player up; the one who moves first in game 1 goes last, so a server that
+        keeps one model loaded at a time still holds it when the game starts.
 
         Raises:
             TransportError: A player failed the warm-up; the message names it.
         """
-        for player in reversed(self._players):
+        game = self._master.game
+        first_mover = game.side_to_move(game.new_state(game_seed(self._seed, 1)))
+        order = self._players if first_mover is Side.SECOND else reversed(self._players)
+        for player in order:
             try:
-                await warm_up(
-                    self._game, player, max_turns=self.state.max_turns, backoff_s=self._backoff_s
+                await self._master.warm_up(
+                    player, max_turns=self.state.max_turns, backoff_s=self._backoff_s
                 )
             except TransportError as e:
                 raise TransportError(f"warm-up call to {player.name} failed: {e}") from e
@@ -246,11 +302,11 @@ class Competition:
             first, second = self._players
             pair = (first, second) if number % 2 == 1 else (second, first)
             result = await self._until_stopped(
-                play_game(
-                    self._game,
+                self._master.play(
                     pair,
-                    max_turns=self.state.max_turns,
                     number=number,
+                    seed=game_seed(self._seed, number),
+                    max_turns=self.state.max_turns,
                     publish=self._publish,
                     backoff_s=self._backoff_s,
                 )
@@ -281,22 +337,32 @@ class Competition:
         if result.outcome is not None:
             for name in result.players:
                 self.state.stats[name].add(result)
+        game = self._master.game
         stem = self.run_dir / f"game-{result.number:03d}"
-        stem.with_suffix(f".{self._game.record_extension}").write_text(
-            self._game.record(result.state, result.outcome, result.players), encoding="utf-8"
+        stem.with_suffix(f".{game.record_extension}").write_text(
+            game.record(result.state, result.outcome, result.players, start_number(result.number)),
+            encoding="utf-8",
         )
         game_json = {
-            **dataclasses.asdict(summary),
-            "side_names": self._game.side_names,
+            **_as_json(summary),
+            "side_names": game.side_names,
             "turns": [dataclasses.asdict(turn) for turn in result.turns],
         }
         _write_json(stem.with_suffix(".json"), game_json)
         self._save()
 
     def _save(self) -> None:
-        state = dataclasses.asdict(self.state)
+        state = _as_json(self.state)
         state["prompt_version"] = self._prompt_version
         _write_json(self.run_dir / "competition.json", state)
+
+
+def _as_json(obj: object) -> dict:
+    """`dataclasses.asdict` without `points` fields that are None, so a game without points
+    (chess) saves no points at all."""
+    return dataclasses.asdict(
+        obj, dict_factory=lambda items: {k: v for k, v in items if k != "points" or v is not None}
+    )
 
 
 def _safe(name: str) -> str:
@@ -311,9 +377,19 @@ def load_state(run_dir: Path) -> CompetitionState:
     """Read a saved competition back, for `ollmpiada show`."""
     data = json.loads((run_dir / "competition.json").read_text(encoding="utf-8"))
     data.pop("prompt_version", None)
+    data.setdefault("seed", None)
     data["side_names"], data["players"] = tuple(data["side_names"]), tuple(data["players"])
     data["stats"] = {name: PlayerStats(**s) for name, s in data["stats"].items()}
-    data["results"] = [
-        GameSummary(**{**r, "players": tuple(r["players"])}) for r in data["results"]
-    ]
+    data["results"] = [_load_summary(r) for r in data["results"]]
     return CompetitionState(**data)
+
+
+def _load_summary(data: dict) -> GameSummary:
+    points = data.get("points")
+    return GameSummary(
+        **{
+            **data,
+            "players": tuple(data["players"]),
+            "points": None if points is None else tuple(points),
+        }
+    )

@@ -27,7 +27,9 @@ uv run pytest tests/test_x.py -k name   # one test
   scripted fake players that return prepared answers (legal moves, illegal moves,
   resignations, timeouts), so every end-of-game rule in
   [game master](game-master/results.md#end-of-game) is testable offline.
-  The fake is `ScriptedPlayer` in `tests/fakes.py`; `tests/conftest.py` holds the
+  The fake is `ScriptedPlayer` in `tests/fakes.py`; its subclass `PickingPlayer`
+  answers with the legal move at a fixed place in the list, which plays a whole
+  bridge deal without a script. `tests/conftest.py` holds the
   shared model config fixtures (`models_data`, `models_file`). A competition calls
   each player once to [warm it up](architecture.md#competition-runner) before the
   first game, so a competition script starts with `WARM_UP` (the test helpers
@@ -43,6 +45,12 @@ uv run pytest tests/test_x.py -k name   # one test
   in `tests/fakes.py`, chess whose `evaluate` returns prepared scores, and CLI
   tests replace `ChessGame.session` so no engine starts. One test runs the real
   Stockfish and is skipped when it is not installed.
+- The [game hooks](game-master/README.md#game-abstraction) set the way chess
+  never sets them (`move_only` always true, no `turn_limit`, a recording `forfeit`,
+  a `move_mark` that does not follow move pairs, its own wording of answer format,
+  questions and rejections) are tested with `MovesOnly` in
+  `tests/fakes.py`, a game of moves alone; tests add it to `MASTERS` to run it
+  through the CLI.
 - Player adapters are tested against recorded HTTP exchanges or PydanticAI's
   `TestModel` / `FunctionModel`, never a live endpoint. The OpenAI and Anthropic
   clients take an `httpx2` client (`httpx2.MockTransport`); the decision player

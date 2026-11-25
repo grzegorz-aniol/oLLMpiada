@@ -17,15 +17,17 @@ from ollmpiada.competition import (
     CompetitionState,
     GameSummary,
     PlayerStats,
+    start_number,
 )
 from ollmpiada.game_master import (
     AnswerReceived,
     AnswerRejected,
     GameFinished,
+    GameMaster,
     GameStarted,
     MoveMade,
 )
-from ollmpiada.games.base import Game, Side
+from ollmpiada.games.base import Side
 
 # The move list keeps this height, so the board below it never moves.
 MOVE_LIST_LINES = 4
@@ -47,9 +49,15 @@ def _reason(summary: GameSummary) -> str:
     return f"{summary.reason}: {summary.score}" if summary.score else summary.reason
 
 
+def _has_points(state: CompetitionState) -> bool:
+    """A counted game has points, so tables and summaries show them; chess has none."""
+    return any(s.points is not None for s in state.stats.values())
+
+
 def stats_table(state: CompetitionState) -> Table:
-    numbers = ["Games", "W", "L", "D", "Adj. W/L/D", "Think s", "s/move", "Tokens in/out/reas.",
-               "Illegal", "/game"]  # fmt: skip
+    points = _has_points(state)
+    numbers = ["Games", "W", "L", "D", "Adj. W/L/D", *(["Points"] if points else []), "Think s",
+               "s/move", "Tokens in/out/reas.", "Illegal", "/game"]  # fmt: skip
     table = Table(
         Column("Player", overflow="fold"),
         *(Column(header, no_wrap=True) for header in numbers),
@@ -64,6 +72,7 @@ def stats_table(state: CompetitionState) -> Table:
             str(s.losses),
             str(s.draws),
             f"{s.adjudicated_wins}/{s.adjudicated_losses}/{s.adjudicated_draws}",
+            *([str(s.points)] if points else []),
             f"{s.thinking_s:.1f}",
             f"{s.thinking_s / s.moves:.1f}" if s.moves else "-",
             _tokens(s),
@@ -97,6 +106,35 @@ def _token_cells(s: PlayerStats) -> tuple[str, str, str]:
     return partly + _count(s.input_tokens), partly + _count(s.output_tokens), reasoning
 
 
+def board_table(state: CompetitionState) -> Table | None:
+    """For a game played in duplicate pairs: each player's points at the two tables of a
+    board (games 2k-1 and 2k, see `start_number`) and who won the board by how much, so equal
+    tables read as a tie, not a win each. None until a board has both tables counted."""
+    boards: defaultdict[int, list[GameSummary]] = defaultdict(list)
+    for r in state.results:
+        if r.points is not None:
+            boards[start_number(r.number)].append(r)
+    first, second = state.players
+    table = Table(
+        "Board",
+        Column(first, no_wrap=True),
+        Column(second, no_wrap=True),
+        "Result",
+        title="Boards",
+        caption="points at table 1 + table 2",
+        **COMPACT,
+    )
+    for board, pair in boards.items():
+        if len(pair) < 2:
+            continue
+        a, b = ([r.points[r.players.index(name)] for r in pair] for name in (first, second))
+        margin = sum(a) - sum(b)
+        winner = first if margin > 0 else second
+        result = f"{winner} by {abs(margin)}" if margin else "tie"
+        table.add_row(str(board), f"{a[0]} + {a[1]}", f"{b[0]} + {b[1]}", result)
+    return table if table.rows else None
+
+
 def _duration(elapsed: timedelta) -> str:
     minutes, secs = divmod(int(elapsed.total_seconds()), 60)
     hours, minutes = divmod(minutes, 60)
@@ -108,10 +146,12 @@ def summary_lines(state: CompetitionState) -> list[str]:
     lines = [f"Competition {state.status}: {len(state.results)} of {state.games} games played."]
     if state.error:
         lines.append(f"Error: {state.error}")
+    points = _has_points(state)
     for s in state.stats.values():
         lines.append(
             f"{s.name}: {s.wins} wins, {s.losses} losses, {s.draws} draws; adjudicated "
             f"{s.adjudicated_wins} wins, {s.adjudicated_losses} losses, {s.adjudicated_draws} draws"
+            + (f"; {s.points} points" if points else "")
         )
     counted = state.stats[state.players[0]].games
     if counted % 2:
@@ -149,7 +189,7 @@ class LiveView:
     """Rich renderable fed by runner events; the CLI refreshes Live after each event and
     periodically, so timers, computed at render time from `clock`, tick between events."""
 
-    game: Game
+    master: GameMaster
     visual: bool
     clock: Callable[[], datetime] = datetime.now
     state: CompetitionState | None = None
@@ -157,22 +197,22 @@ class LiveView:
     turn: int = 0
     board: object = None
     moves: Text = field(default_factory=Text)
-    numbered_turn: int = -1
+    marked_turn: int = -1
     game_stats: GameStats | None = None
 
     def handle(self, event: CompetitionEvent) -> None:
         match event:
             case GameStarted(number=number, players=players, state=board):
                 self.current, self.turn, self.board = number, 0, board
-                self.moves, self.numbered_turn = Text(), -1
+                self.moves, self.marked_turn = Text(), -1
                 now = self.clock()
                 stats = {name: PlayerStats(name) for name in players}
                 self.game_stats = GameStats(players, stats, now, now)
             case AnswerReceived(player=player, elapsed_s=elapsed_s, usage=usage):
                 assert self.game_stats is not None
                 self.game_stats.stats[player].add_call(elapsed_s, usage)
-            case MoveMade(side=side, player=player, move=move, state=board, draw_offered=offered):
-                self._note(side, move + (" (offers draw)" if offered else ""))
+            case MoveMade(player=player, move=move, state=board, draw_offered=offered):
+                self._note(move + (" (offers draw)" if offered else ""))
                 self.turn += 1
                 self.board = board
                 assert self.game_stats is not None
@@ -182,8 +222,8 @@ class LiveView:
             case AnswerRejected(side=side, reason=reason, attempt=attempt):
                 reason = " ".join(reason.split())
                 reason = reason if len(reason) <= REASON_SHOWN else reason[:REASON_SHOWN] + "..."
-                entry = f"[✗ {self.game.side_name(side)} {attempt}: {reason}]"
-                self._note(side, entry, style="red")
+                entry = f"[✗ {self.master.game.side_name(side)} {attempt}: {reason}]"
+                self._note(entry, style="red")
             case GameFinished():
                 self.current = None
                 self._end_game()
@@ -198,11 +238,13 @@ class LiveView:
         if self.game_stats is not None and self.game_stats.ended_at is None:
             self.game_stats.ended_at = self.clock()
 
-    def _note(self, side: Side, entry: str, style: str = "") -> None:
-        """Append to the flowing move list, numbering each pair before its first entry."""
-        if side is Side.FIRST and self.numbered_turn != self.turn:
-            self.numbered_turn = self.turn
-            self.moves.append(f"({self.turn // 2 + 1}) ")
+    def _note(self, entry: str, style: str = "") -> None:
+        """Append to the flowing move list, with the game's mark (`Game.move_mark`) before the
+        first entry of a turn."""
+        mark = self.master.game.move_mark(self.board)
+        if mark and self.marked_turn != self.turn:
+            self.marked_turn = self.turn
+            self.moves.append(f"{mark} ")
         self.moves.append(entry, style=style)
         self.moves.append(" ")
 
@@ -225,8 +267,8 @@ class LiveView:
         # Retries keep the turn clock running: it times the whole turn, not one request.
         # A game ending without a move (resignation, a stop) counts the last turn too.
         turn = (g.ended_at or now) - g.turn_started_at
-        mover = 0 if self.game.side_to_move(self.board) is Side.FIRST else 1
-        legal = len(self.game.legal_moves(self.board))
+        mover = 0 if self.master.game.side_to_move(self.board) is Side.FIRST else 1
+        legal = len(self.master.game.legal_moves(self.board))
         numbers = ("Now", "Legal", "Total", "Requests", "Tokens in", "Tokens out", "Reasoning")
         table = Table(
             "",
@@ -242,7 +284,7 @@ class LiveView:
             stats = g.stats[name]
             table.add_row(
                 THINKING if thinking else "",
-                self.game.side_names[index],
+                self.master.game.side_names[index],
                 name,
                 _duration(turn) if thinking else "",
                 str(legal) if thinking else "",
@@ -259,13 +301,13 @@ class LiveView:
             return
         status = Text(f"Games {len(self.state.results)} of {self.state.games}")
         if self.current is not None:
-            # Moves per side, the unit of --max-turns.
-            status.append(f" | game {self.current}, move {self.turn // 2 + 1}")
+            progress = self.master.game.progress(self.board, self.turn)
+            status.append(f" | game {self.current}, {progress}")
         status.append(f" | {self.state.status}")
         yield status
         if self.visual and self.board is not None:
             yield self._move_list(console, options.max_width)
-            yield self.game.render(self.board)
+            yield self.master.game.render(self.board)
             if self.game_stats is not None:
                 yield self._game_stats_view(self.game_stats)
         yield results_table(self.state)

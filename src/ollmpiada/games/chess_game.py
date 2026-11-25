@@ -13,12 +13,18 @@ from rich.text import Text
 from ollmpiada.config import Settings
 from ollmpiada.games.base import (
     ADJUDICATION,
+    EVENT,
     AdjudicationError,
     Game,
     GameSetupError,
     IllegalMove,
     Outcome,
+    PromptContext,
+    Questions,
+    Rejection,
     Side,
+    first_full_move,
+    strip_answer,
 )
 
 HERE = Path(__file__).parent
@@ -38,10 +44,6 @@ PIECE_STYLES = {chess.WHITE: "bold #ffffff", chess.BLACK: "bold #000000"}
 # The position text shows only the opponent's last move and the player's own previous one;
 # the board and FEN carry the position, and the draw-rule lines carry what history would.
 RECENT_PLIES = 2
-# Whitespace (any Unicode kind) and characters no move contains, so answers wrapped in
-# markdown, quotes or punctuation still read as the move inside.
-EDGE_CLASS = r"[\s*`\"'“”‘’()!?.,;…]"
-EDGE = re.compile(rf"^{EDGE_CLASS}+|{EDGE_CLASS}+$")
 MOVE_NUMBER = re.compile(r"^\d+\s*[.…][.…\s]*")
 EN_PASSANT_MARK = re.compile(r"(?<=[1-8+#])\s*\(?e\.?\s*p\.?$", re.IGNORECASE)
 SPLIT_SQUARES = re.compile(r"^([a-h][1-8])[\s-]+(?=[a-h][1-8])", re.IGNORECASE)
@@ -53,6 +55,29 @@ MATE_CP = 100_000
 # time cap is a safety net: only a limit with a time makes SimpleEngine give up on a hung
 # engine, after that time plus its 10 s communication timeout.
 ADJUDICATION_LIMIT = chess.engine.Limit(depth=16, time=5)
+ANSWER_FORMAT = """ANSWER FORMAT
+
+Answer with three fields: action (move, resign or accept_draw); move (your move
+exactly as listed under LEGAL MOVES, required when action is move); offer_draw
+(true to offer a draw together with your move, otherwise false).
+"""
+MOVE_ONLY_ANSWER_FORMAT = """ANSWER FORMAT
+
+Answer with one field: move (your move exactly as listed under LEGAL MOVES).
+"""
+QUESTIONS = Questions(
+    move="Which move do you play?",
+    piece="Which piece do you move? Each option lists its moves.",
+    action="What do you do this turn?",
+    offer_draw="Do you offer a draw together with your move?",
+    options={
+        "move": "Make a move",
+        "resign": "Resign the game",
+        "accept_draw": "Accept the opponent's draw offer",
+        "yes": "Offer a draw",
+        "no": "Do not offer a draw",
+    },
+)
 
 
 def _side(color: chess.Color) -> Side:
@@ -66,9 +91,15 @@ def _loose(move_text: str) -> str:
 
 def _normalized(text: str) -> str:
     """`**12... exd6 e.p.**` -> `exd6`, `e2 e4` -> `e2e4`: the move without what models add."""
-    move = EDGE.sub("", MOVE_NUMBER.sub("", EDGE.sub("", text)))
+    move = strip_answer(MOVE_NUMBER.sub("", strip_answer(text)))
     move = EN_PASSANT_MARK.sub("", move)
     return SPLIT_SQUARES.sub(r"\1", move)
+
+
+def _opening_notice() -> str:
+    """Why a turn in the opening allows only a move."""
+    # Through base at call time, so a test that patches OPENING_MOVES there sees it.
+    return f"resigning and draw offers start with your move {first_full_move()}"
 
 
 def _undisambiguated(san: str) -> str:
@@ -82,11 +113,12 @@ class ChessGame(Game[chess.Board]):
     system_template = (HERE / "chess_system_prompt.txt").read_text(encoding="utf-8")
     user_template = (HERE / "chess_user_prompt.txt").read_text(encoding="utf-8")
     record_extension = "pgn"
+    questions = QUESTIONS
 
     def __init__(self) -> None:
         self._engine: chess.engine.SimpleEngine | None = None
 
-    def new_state(self) -> chess.Board:
+    def new_state(self, seed: int) -> chess.Board:
         return chess.Board()
 
     def side_to_move(self, state: chess.Board) -> Side:
@@ -171,6 +203,10 @@ class ChessGame(Game[chess.Board]):
         text = str(score) if score.is_mate() else f"{score} cp"
         return Outcome(winner, ADJUDICATION, text)
 
+    def move_mark(self, state: chess.Board) -> str | None:
+        """The move number before White's move: `(1) e4 e5 (2) Nf3`."""
+        return f"({state.fullmove_number})" if state.turn == chess.WHITE else None
+
     def evaluate(self, state: chess.Board) -> chess.engine.Score:
         """The engine's score of the position from White's view."""
         if self._engine is None:
@@ -200,6 +236,41 @@ class ChessGame(Game[chess.Board]):
         finally:
             self._engine = None
             engine.close()
+
+    def prompt_values(self, ctx: PromptContext) -> dict[str, object]:
+        """The opening length and the choose-move, draw-offer and retry sentences of the turn."""
+        return dict(
+            opening_moves=first_full_move() - 1,
+            choose_move=(
+                f"Choose exactly one move from this list; {_opening_notice()}."
+                if ctx.move_only
+                else "Unless you resign or accept a draw, choose exactly one move from this list."
+            ),
+            draw_offer=(
+                f"{self.side_name(ctx.side.opponent)} offers a draw. Answer accept_draw to "
+                "accept it, or make a move to decline it."
+                if ctx.draw_offered
+                else "No draw offer is pending."
+            ),
+            previous_attempt=(
+                f"PREVIOUS ATTEMPT\n\nYour previous answer this turn was rejected: "
+                f"{ctx.rejection}\nAnswer again with a legal move."
+                if ctx.rejection
+                else ""
+            ),
+        )
+
+    def answer_format(self, ctx: PromptContext) -> str:
+        return MOVE_ONLY_ANSWER_FORMAT if ctx.move_only else ANSWER_FORMAT
+
+    def rejection(self, rule: Rejection) -> str:
+        match rule:
+            case Rejection.MOVE_ONLY:
+                return f"{_opening_notice()}; play a move"
+            case Rejection.NO_DRAW_OFFER:
+                return "there is no draw offer to accept"
+            case Rejection.NO_MOVE:
+                return "the action is move but no move was given"
 
     def describe(self, state: chess.Board) -> str:
         rows = [
@@ -261,9 +332,11 @@ class ChessGame(Game[chess.Board]):
         board.append("  " + "".join(f" {f} " for f in "abcdefgh"), style="dim")
         return board
 
-    def record(self, state: chess.Board, outcome: Outcome | None, players: tuple[str, str]) -> str:
+    def record(
+        self, state: chess.Board, outcome: Outcome | None, players: tuple[str, str], start: int
+    ) -> str:
         game = chess.pgn.Game.from_board(state)
-        game.headers["Event"] = "oLLMpiada"
+        game.headers["Event"] = EVENT
         game.headers["White"], game.headers["Black"] = players
         if outcome is None:
             game.headers["Result"] = "*"

@@ -60,5 +60,6 @@ must also run belongs in a skill, because Codex has no project commands.
   environment variables, loaded from `.env` at startup.
 - Tests never call a real model; they use scripted fake players (see
   [testing](docs/testing.md)).
-- Both players of a game get the same prompt text; only the answer format differs.
+- Both players of a game get the same prompt templates; only the answer format and,
+  in a hidden-information game, the mover's view of the position differ.
   The rule is owned by [game master](docs/game-master/prompts.md#prompts).

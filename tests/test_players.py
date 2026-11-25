@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import random
+import re
+from typing import get_args
 
 import httpx
 import httpx2
@@ -15,22 +17,31 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from ollmpiada.config import load_models
-from ollmpiada.game_master import GameResult, play_game
-from ollmpiada.games.base import Outcome, Prompt, Side
+from ollmpiada.game_master import GameResult, TurnBasedMaster
+from ollmpiada.games.base import Outcome, Prompt, Questions, Side, first_full_move
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import PlayerError, create_player, resolve_player
-from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer, TurnRequest, Usage
-from ollmpiada.players.decision import DecisionPlayer
-from ollmpiada.players.llm import (
-    ANSWER_FORMAT,
-    MOVE_ONLY_ANSWER_FORMAT,
-    LLMPlayer,
-    create_llm_player,
-    llm_message,
+from ollmpiada.players.base import (
+    Action,
+    PermanentError,
+    TransportError,
+    TurnAnswer,
+    TurnRequest,
+    Usage,
 )
+from ollmpiada.players.decision import DecisionPlayer
+from ollmpiada.players.llm import LLMPlayer, MoveAnswer, create_llm_player, llm_message
 from tests.fakes import Judged, ScriptedPlayer, unreadable
 
-PROMPT = Prompt(system="RULES\n", user="POSITION\n")
+# Wording no game uses, so a test sees that a player sends the game's words and adds none.
+QUESTIONS = Questions(
+    move="MOVE?",
+    piece="PIECE?",
+    action="ACTION?",
+    offer_draw="DRAW?",
+    options={"move": "M", "resign": "R", "accept_draw": "A", "yes": "Y", "no": "N"},
+)
+PROMPT = Prompt(system="RULES\n", user="POSITION\n", answer_format="FORMAT\n", questions=QUESTIONS)
 REQUEST = TurnRequest(prompt=PROMPT, legal_moves={"e2e4": "e4", "g1f3": "Nf3"})
 MOVE_ONLY = dataclasses.replace(REQUEST, move_only=True)
 MESSAGE_SENT = llm_message(PROMPT)
@@ -151,7 +162,7 @@ def test_llm_sends_rules_answer_format_and_turn_as_one_user_message_without_inst
     request = requests[0]
     assert request.instructions is None
     assert [part.content for part in request.parts] == [MESSAGE_SENT]
-    assert MESSAGE_SENT == "RULES\n" + ANSWER_FORMAT + "\nPOSITION\n"
+    assert MESSAGE_SENT == "RULES\n\nFORMAT\n\nPOSITION\n"
 
 
 def test_llm_move_only_turn_asks_for_a_move_alone():
@@ -164,10 +175,8 @@ def test_llm_move_only_turn_asks_for_a_move_alone():
     player, seen = function_player(capture)
     response = play(player, MOVE_ONLY)
     assert response.answer == TurnAnswer(action="move", move="Nf3")
-    assert [part.content for part in requests[0].parts] == [
-        "RULES\n" + MOVE_ONLY_ANSWER_FORMAT + "\nPOSITION\n"
-    ]
-    assert "resign" not in MOVE_ONLY_ANSWER_FORMAT and "draw" not in MOVE_ONLY_ANSWER_FORMAT
+    # The game words the move-only answer format; the player only narrows the output schema.
+    assert [part.content for part in requests[0].parts] == [MESSAGE_SENT]
     (tool,) = seen[0].output_tools
     assert set(tool.parameters_json_schema["properties"]) == {"move"}
 
@@ -187,6 +196,55 @@ def test_llm_move_only_answer_is_parsed_from_the_reply_text(output_mode):
     assert set(schema["properties"]) == {"move"}
 
 
+# Words that would tie the answer schema to one game or to the code; the games word everything
+# game-specific (docs/game-master/prompts.md#prompts).
+GAME_WORDS = ("chess", "bridge", "card", "trick", "piece", "legal moves", "legal cards", "san")
+CODE_NAMES = ("TurnAnswer", "MoveAnswer", "TurnRequest", "move_only", "game master", "`")
+
+
+def sent_schema(info: AgentInfo, output_mode: str) -> tuple[str, dict]:
+    """The answer schema's description and JSON schema as PydanticAI hands them to the model."""
+    if output_mode == "tool":
+        (tool,) = info.output_tools
+        return tool.description or "", tool.parameters_json_schema
+    output = info.model_request_parameters.output_object
+    assert output.name == "answer"
+    return output.description or "", output.json_schema
+
+
+def field_descriptions(answer_type) -> list[str]:
+    return [field.description for field in answer_type.model_fields.values()]
+
+
+@pytest.mark.parametrize("request_", [REQUEST, MOVE_ONLY], ids=["full", "move-only"])
+@pytest.mark.parametrize("output_mode", ["tool", "native", "prompted"])
+def test_llm_answer_schema_tells_the_model_what_each_field_holds(output_mode, request_):
+    player, seen = function_player(text_reply("-"), output_mode=output_mode)
+    play(player, request_)
+    description, schema = sent_schema(seen[0], output_mode)
+    properties = schema["properties"]
+    answer_type = MoveAnswer if request_.move_only else TurnAnswer
+    assert [p.get("description") for p in properties.values()] == field_descriptions(answer_type)
+    texts = [description] + [p.get("description", "") for p in properties.values()]
+    assert all(text.strip() for text in texts)
+    model_text = " ".join(texts).lower()
+    assert not [w for w in GAME_WORDS if re.search(rf"\b{w}s?\b", model_text)]
+    assert not [name for name in CODE_NAMES if name in json.dumps(schema) + description]
+    move = properties["move"]["description"]
+    for point in ("Exactly one entry from the legal list in the message", "copied unchanged"):
+        assert point in move
+    assert "no explanation, no Markdown and no other text" in move
+    if request_.move_only:
+        assert set(properties) == {"move"}
+        return
+    assert properties["action"]["enum"] == list(get_args(Action))
+    action = properties["action"]["description"]
+    assert all(f'"{value}"' in action for value in get_args(Action))
+    assert "only allowed while the message says a draw offer is pending" in action
+    assert move.startswith('Required when action is "move"')
+    assert 'true only together with action "move"' in properties["offer_draw"]["description"]
+
+
 def answer_fields(info: AgentInfo) -> set[str]:
     return set(info.output_tools[0].parameters_json_schema["properties"])
 
@@ -203,7 +261,7 @@ def test_llm_game_asks_for_moves_alone_until_move_six_then_for_the_full_answer()
     white, seen = function_player(reply)
     black = ScriptedPlayer("black", ["e5", "Nc6", "Bc5", "Nf6", "d6"])
     result = asyncio.run(
-        play_game(ChessGame(), (white, black), max_turns=50, number=1, publish=lambda e: None)
+        TurnBasedMaster(ChessGame()).play((white, black), max_turns=50, publish=lambda e: None)
     )
     assert result.outcome == Outcome(Side.SECOND, "resignation")
     assert [answer_fields(info) for info in seen] == [{"move"}] * 5 + [
@@ -379,6 +437,14 @@ def text_completion(content: str) -> dict:
     return {**CHAT_COMPLETION, "choices": [choice]}
 
 
+def assert_schema_sent(answer_type, sent: str) -> None:
+    """Every field description reaches the model and no code name does; in prompted mode `sent`
+    is the system text, which holds the schema as JSON, so the descriptions appear JSON-escaped."""
+    for description in field_descriptions(answer_type):
+        assert json.dumps(description)[1:-1] in sent
+    assert not [name for name in CODE_NAMES if name in sent]
+
+
 def with_output_mode(model, mode):
     return dataclasses.replace(model, spec=model.spec.model_copy(update={"output_mode": mode}))
 
@@ -418,6 +484,7 @@ def test_llm_output_mode_decides_how_openai_asks_for_the_answer(
         assert "RULES" not in system[0]
     else:
         assert system == []
+    assert_schema_sent(TurnAnswer, system[0] if mode == "prompted" else json.dumps(body))
 
 
 @pytest.mark.parametrize(
@@ -561,6 +628,8 @@ def test_llm_output_mode_over_anthropic_messages(models, mode, output_format):
         assert '"offer_draw"' in block["text"] and "RULES" not in block["text"]
     else:
         assert "system" not in body
+    sent = body["system"][0]["text"] if mode == "prompted" else json.dumps(body)
+    assert_schema_sent(TurnAnswer, sent)
 
 
 def test_llm_max_tokens_caps_anthropic_output(models):
@@ -687,11 +756,12 @@ def test_decision_request_shape_without_token(models):
     payload = json.loads(request.content)
     assert payload["model"] == "basal" and payload["state"] == "RULES\n\nPOSITION\n"
     questions = payload["questions"]
-    assert set(questions) == {"action", "move", "offer_draw"}
     assert all(q["type"] == "choice" for q in questions.values())
-    assert set(questions["action"]["criteria"]) == {"move", "resign"}
-    assert questions["move"]["criteria"] == {"e2e4": "e4", "g1f3": "Nf3"}
-    assert set(questions["offer_draw"]["criteria"]) == {"yes", "no"}
+    assert {name: (q["instructions"], q["criteria"]) for name, q in questions.items()} == {
+        "action": ("ACTION?", {"move": "M", "resign": "R"}),
+        "offer_draw": ("DRAW?", {"yes": "Y", "no": "N"}),
+        "move": ("MOVE?", {"e2e4": "e4", "g1f3": "Nf3"}),
+    }
 
 
 def test_decision_offers_accept_draw_only_while_pending_and_sends_token(models):
@@ -701,7 +771,36 @@ def test_decision_offers_accept_draw_only_while_pending_and_sends_token(models):
     response = play(decision_player(models, answering(body, sent), token="tok"), request)
     assert response.answer == TurnAnswer(action="accept_draw")
     assert sent[0].headers["authorization"] == "Bearer tok"
-    assert "accept_draw" in json.loads(sent[0].content)["questions"]["action"]["criteria"]
+    action = json.loads(sent[0].content)["questions"]["action"]
+    assert action["criteria"] == {"move": "M", "resign": "R", "accept_draw": "A"}
+
+
+def test_decision_asks_chess_questions_in_the_chess_wording(models):
+    game = ChessGame()
+    state = game.new_state(0)
+    ctx = game.context(state, turn=first_full_move(), max_turns=40, draw_offered=True)
+    request = TurnRequest(
+        game.prompt(ctx), game.legal_moves(state), ctx.draw_offered, game.move_groups(state)
+    )
+    body = {"action": "move", "offer_draw": "no", "piece": "pawn_e2", "move": "e2e4"}
+    sent = []
+    play(decision_player(models, scripted(body, sent)), request)
+    play(decision_player(models, scripted(body, sent), max_options=19), request)
+    whole, by_piece = ({name: q["instructions"] for name, q in asked.items()} for asked in sent)
+    assert whole == {
+        "action": "What do you do this turn?",
+        "offer_draw": "Do you offer a draw together with your move?",
+        "move": "Which move do you play?",
+    }
+    assert by_piece["piece"] == "Which piece do you move? Each option lists its moves."
+    assert by_piece["move_pawn_e2"] == "Which move do you play?"
+    assert sent[0]["action"]["criteria"] == {
+        "move": "Make a move",
+        "resign": "Resign the game",
+        "accept_draw": "Accept the opponent's draw offer",
+    }
+    assert sent[0]["offer_draw"]["criteria"] == {"yes": "Offer a draw", "no": "Do not offer a draw"}
+    assert sent[0]["move"]["criteria"] == game.legal_moves(state)
 
 
 def test_decision_move_only_turn_asks_only_for_the_move(models):
@@ -720,7 +819,7 @@ def test_decision_move_only_turn_ignores_an_unasked_resignation(models):
 def play_forced_opening(black) -> GameResult:
     """1. e4 f6 2. Qh5+ g6, where g6 is Black's only legal move, then adjudication."""
     white = ScriptedPlayer("white", ["e4", "Qh5+"])
-    return asyncio.run(play_game(Judged(Cp(0)), (white, black), max_turns=2))
+    return asyncio.run(TurnBasedMaster(Judged(Cp(0))).play((white, black), max_turns=2))
 
 
 @pytest.mark.opening
@@ -879,6 +978,8 @@ def test_decision_asks_the_piece_and_each_pieces_moves_in_one_query(models):
     }
     assert questions["move_queen_d1"]["criteria"] == QUEEN
     assert questions["move_knight_g1"]["criteria"] == KNIGHT
+    assert questions["piece"]["instructions"] == "PIECE?"
+    assert questions["move_knight_g1"]["instructions"] == "MOVE?"
     assert "other" not in json.dumps(questions)
 
 

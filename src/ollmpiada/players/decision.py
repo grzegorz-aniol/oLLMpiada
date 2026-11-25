@@ -138,17 +138,18 @@ def _questions(request: TurnRequest, groups: dict[str, dict[str, str]]) -> dict[
     or the piece question with one move question per group; a single move needs no question
     of its own, since a one-option question tells nothing and SystemOne templates refuse it.
     A move-only turn always has several legal moves: the game master plays a single one itself
-    (docs/game-master/turns.md#opening)."""
+    (docs/game-master/turns.md#opening). The game words every question (`Prompt.questions`)."""
+    wording = request.prompt.questions
     questions = _turn_questions(request)
     if not groups:
         if len(request.legal_moves) > 1:
-            questions["move"] = _move_question(request.legal_moves)
+            questions["move"] = _choice(wording.move, request.legal_moves)
         return questions
     pieces = {key: ", ".join(moves.values()) for key, moves in groups.items()}
-    questions[PIECE] = _choice("Which piece do you move? Each option lists its moves.", pieces)
+    questions[PIECE] = _choice(wording.piece, pieces)
     for key, moves in groups.items():
         if len(moves) > 1:
-            questions[_move_name(key)] = _move_question(moves)
+            questions[_move_name(key)] = _choice(wording.move, moves)
     return questions
 
 
@@ -182,20 +183,12 @@ def _move_name(piece: str) -> str:
 def _turn_questions(request: TurnRequest) -> dict[str, dict]:
     if request.move_only:
         return {}
-    actions = {"move": "Make a move", "resign": "Resign the game"}
-    if request.draw_offered:
-        actions["accept_draw"] = "Accept the opponent's draw offer"
+    wording = request.prompt.questions
+    actions = ["move", "resign", "accept_draw"] if request.draw_offered else ["move", "resign"]
     return {
-        "action": _choice("What do you do this turn?", actions),
-        "offer_draw": _choice(
-            "Do you offer a draw together with your move?",
-            {"yes": "Offer a draw", "no": "Do not offer a draw"},
-        ),
+        "action": _choice(wording.action, {a: wording.options[a] for a in actions}),
+        "offer_draw": _choice(wording.offer_draw, {o: wording.options[o] for o in ("yes", "no")}),
     }
-
-
-def _move_question(criteria: Mapping[str, str]) -> dict:
-    return _choice("Which move do you play?", criteria)
 
 
 def _choice(instructions: str, criteria: Mapping[str, str]) -> dict:

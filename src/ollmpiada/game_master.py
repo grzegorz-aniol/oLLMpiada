@@ -1,19 +1,21 @@
-"""The referee: plays one game between two players and publishes what happens."""
+"""The referee: the `GameMaster` interface and `TurnBasedMaster`, which plays one game of a
+turn-based `Game` between two players and publishes what happens."""
 
 import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from ollmpiada.games.base import (
+    SAMPLE_SEED,
     AdjudicationError,
     Game,
     IllegalMove,
     Outcome,
     PromptContext,
+    Rejection,
     Side,
-    in_opening,
-    opening_notice,
 )
 from ollmpiada.players.base import (
     PermanentError,
@@ -113,130 +115,180 @@ def _ignore(event: Event) -> None:
     pass
 
 
-async def play_game[S](
-    game: Game[S],
-    players: tuple[Player, Player],
-    *,
-    max_turns: int,
-    number: int = 1,
-    publish: Callable[[Event], None] = _ignore,
-    backoff_s: tuple[float, ...] = TRANSPORT_BACKOFF_S,
-) -> GameResult:
-    """Play one game; `players` are in side order (first side moves first)."""
-    names = (players[0].name, players[1].name)
-    state = game.new_state()
-    result = GameResult(number, names, state=state)
-    publish(GameStarted(number, names, state))
-    moves_made = {Side.FIRST: 0, Side.SECOND: 0}
-    draw_offer_by: Side | None = None
+class GameMaster(Protocol):
+    """The referee of one game family; `Competition` and the CLI reach games only through it."""
 
-    while result.outcome is None:
-        side = game.side_to_move(state)
-        player = players[0 if side is Side.FIRST else 1]
-        draw_offered = draw_offer_by is side.opponent
-        turn = moves_made[side] + 1
-        legal = game.legal_moves(state)
-        attempts: list[Attempt] = []
-        accepted: tuple[TurnAnswer, str | None] | None = None
-        if in_opening(turn) and len(legal) == 1:
-            # A move-only turn with one legal move leaves the player no choice, and a decision
-            # model cannot be asked a one-option question; the game master plays it for every
-            # player alike, so the turn has no attempts and costs no call.
-            accepted = TurnAnswer(action="move"), next(iter(legal))
-        rejection = None
-        while accepted is None and len(attempts) < ATTEMPTS_PER_TURN:
-            ctx = game.context(
-                state,
-                turn=turn,
-                max_turns=max_turns,
-                draw_offered=draw_offered,
-                rejection=rejection,
-            )
-            request = _request(game, state, ctx)
-            try:
-                response = await _call(player, request, backoff_s)
-            except TransportError as e:
-                if attempts:
-                    result.turns.append(Turn(side, player.name, "aborted", None, attempts))
-                result.error = f"{player.name}: {e}"
-                result.state = state
-                publish(GameFinished(result))
-                return result
-            publish(AnswerReceived(number, side, player.name, response.elapsed_s, response.usage))
-            try:
-                accepted = _validate(game, state, response, request)
-                attempts.append(Attempt(response.raw, response.elapsed_s, response.usage))
-            except IllegalMove as e:
-                reason = str(e)
-                attempts.append(Attempt(response.raw, response.elapsed_s, response.usage, reason))
-                rejection = f"you answered {_shorten(response.raw)!r}; {reason}"
-                publish(
-                    AnswerRejected(number, side, player.name, response.raw, reason, len(attempts))
+    @property
+    def game(self) -> Game: ...
+
+    async def play(
+        self,
+        players: tuple[Player, Player],
+        *,
+        number: int,
+        seed: int,
+        max_turns: int | None,
+        publish: Callable[[Event], None],
+        backoff_s: tuple[float, ...],
+    ) -> GameResult:
+        """Play one game from the start `seed` gives; `players` are in side order. `max_turns`
+        is None for a game without a turn limit."""
+
+    def start_request(self, *, max_turns: int | None, turn: int = 1) -> TurnRequest:
+        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up and
+        `ollmpiada probe`); `turn` decides which answer format it asks for."""
+
+    async def warm_up(
+        self, player: Player, *, max_turns: int | None, backoff_s: tuple[float, ...]
+    ) -> None:
+        """Send the player one opening turn and discard the answer.
+
+        Raises:
+            TransportError: The player still failed after the transport retries.
+        """
+
+
+@dataclass(frozen=True)
+class TurnBasedMaster[S]:
+    """The game master of turn-based games behind the `Game` interface."""
+
+    game: Game[S]
+
+    async def play(
+        self,
+        players: tuple[Player, Player],
+        *,
+        max_turns: int | None,
+        number: int = 1,
+        seed: int = 0,
+        publish: Callable[[Event], None] = _ignore,
+        backoff_s: tuple[float, ...] = TRANSPORT_BACKOFF_S,
+    ) -> GameResult:
+        """Play one game from `game.new_state(seed)`; `players` are in side order."""
+        game = self.game
+        names = (players[0].name, players[1].name)
+        state = game.new_state(seed)
+        result = GameResult(number, names, state=state)
+        publish(GameStarted(number, names, state))
+        moves_made = {Side.FIRST: 0, Side.SECOND: 0}
+        draw_offer_by: Side | None = None
+
+        while result.outcome is None:
+            side = game.side_to_move(state)
+            player = players[0 if side is Side.FIRST else 1]
+            draw_offered = draw_offer_by is side.opponent
+            turn = moves_made[side] + 1
+            legal = game.legal_moves(state)
+            attempts: list[Attempt] = []
+            accepted: tuple[TurnAnswer, str | None] | None = None
+            if game.move_only(turn) and len(legal) == 1:
+                # A move-only turn with one legal move leaves the player no choice, and a decision
+                # model cannot be asked a one-option question; the game master plays it for every
+                # player alike, so the turn has no attempts and costs no call.
+                accepted = TurnAnswer(action="move"), next(iter(legal))
+            rejection = None
+            while accepted is None and len(attempts) < ATTEMPTS_PER_TURN:
+                ctx = game.context(
+                    state,
+                    turn=turn,
+                    max_turns=max_turns,
+                    draw_offered=draw_offered,
+                    rejection=rejection,
                 )
+                request = self._request(state, ctx)
+                try:
+                    response = await _call(player, request, backoff_s)
+                except TransportError as e:
+                    if attempts:
+                        result.turns.append(Turn(side, player.name, "aborted", None, attempts))
+                    result.error = f"{player.name}: {e}"
+                    result.state = state
+                    publish(GameFinished(result))
+                    return result
+                publish(
+                    AnswerReceived(number, side, player.name, response.elapsed_s, response.usage)
+                )
+                try:
+                    accepted = _validate(game, state, response, request)
+                    attempts.append(Attempt(response.raw, response.elapsed_s, response.usage))
+                except IllegalMove as e:
+                    reason = str(e)
+                    attempts.append(
+                        Attempt(response.raw, response.elapsed_s, response.usage, reason)
+                    )
+                    rejection = f"you answered {_shorten(response.raw)!r}; {reason}"
+                    publish(
+                        AnswerRejected(
+                            number, side, player.name, response.raw, reason, len(attempts)
+                        )
+                    )
 
-        if accepted is None:
-            result.turns.append(Turn(side, player.name, "illegal", None, attempts))
-            result.outcome = Outcome(side.opponent, "illegal answers")
-            break
-        answer, move_id = accepted
-        if answer.action == "resign":
-            result.turns.append(Turn(side, player.name, "resign", None, attempts))
-            result.outcome = Outcome(side.opponent, "resignation")
-            break
-        if answer.action == "accept_draw":
-            result.turns.append(Turn(side, player.name, "accept_draw", None, attempts))
-            result.outcome = Outcome(None, "draw agreed")
-            break
-
-        assert move_id is not None
-        label = legal[move_id]
-        state = game.apply(state, move_id)
-        moves_made[side] += 1
-        draw_offer_by = side if answer.offer_draw else None
-        result.turns.append(Turn(side, player.name, "move", label, attempts))
-        publish(MoveMade(number, side, player.name, label, state, answer.offer_draw))
-        result.outcome = game.outcome(state)
-        if result.outcome is None and min(moves_made.values()) >= max_turns:
-            try:
-                # A worker thread keeps live timers and Ctrl+C responsive while the engine thinks.
-                result.outcome = await asyncio.to_thread(game.adjudicate, state)
-            except AdjudicationError as e:
-                result.error = str(e)
+            if accepted is None:
+                result.turns.append(Turn(side, player.name, "illegal", None, attempts))
+                result.outcome = game.forfeit(state, side, "illegal answers")
+                break
+            answer, move_id = accepted
+            if answer.action == "resign":
+                result.turns.append(Turn(side, player.name, "resign", None, attempts))
+                result.outcome = game.forfeit(state, side, "resignation")
+                break
+            if answer.action == "accept_draw":
+                result.turns.append(Turn(side, player.name, "accept_draw", None, attempts))
+                result.outcome = Outcome(None, "draw agreed")
                 break
 
-    result.state = state
-    publish(GameFinished(result))
-    return result
+            assert move_id is not None
+            label = legal[move_id]
+            state = game.apply(state, move_id)
+            moves_made[side] += 1
+            draw_offer_by = side if answer.offer_draw else None
+            result.turns.append(Turn(side, player.name, "move", label, attempts))
+            publish(MoveMade(number, side, player.name, label, state, answer.offer_draw))
+            result.outcome = game.outcome(state)
+            if (
+                result.outcome is None
+                and game.turn_limit
+                and max_turns is not None
+                and min(moves_made.values()) >= max_turns
+            ):
+                try:
+                    # A worker thread keeps live timers and Ctrl+C responsive while the engine
+                    # thinks.
+                    result.outcome = await asyncio.to_thread(game.adjudicate, state)
+                except AdjudicationError as e:
+                    result.error = str(e)
+                    break
 
+        result.state = state
+        publish(GameFinished(result))
+        return result
 
-def start_request[S](game: Game[S], *, max_turns: int, turn: int = 1) -> TurnRequest:
-    """A turn in the starting position of a new game, for calls made outside a game (the
-    warm-up and `ollmpiada probe`); `turn` decides whether it falls in the opening and so
-    which answer format it asks for."""
-    state = game.new_state()
-    return _request(game, state, game.context(state, turn=turn, max_turns=max_turns))
+    def start_request(self, *, max_turns: int | None, turn: int = 1) -> TurnRequest:
+        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up and
+        `ollmpiada probe`); `turn` decides whether it is move-only (`Game.move_only`) and so
+        which answer format it asks for."""
+        state = self.game.new_state(SAMPLE_SEED)
+        return self._request(state, self.game.context(state, turn=turn, max_turns=max_turns))
 
+    def _request(self, state: S, ctx: PromptContext) -> TurnRequest:
+        return TurnRequest(
+            self.game.prompt(ctx),
+            self.game.legal_moves(state),
+            ctx.draw_offered,
+            self.game.move_groups(state),
+            ctx.move_only,
+        )
 
-def _request[S](game: Game[S], state: S, ctx: PromptContext) -> TurnRequest:
-    return TurnRequest(
-        game.prompt(ctx),
-        game.legal_moves(state),
-        ctx.draw_offered,
-        game.move_groups(state),
-        ctx.move_only,
-    )
+    async def warm_up(
+        self, player: Player, *, max_turns: int | None, backoff_s: tuple[float, ...]
+    ) -> None:
+        """Send the player one opening turn and discard the answer, so a server that loads
+        models on demand has the model ready before the first game.
 
-
-async def warm_up[S](
-    game: Game[S], player: Player, *, max_turns: int, backoff_s: tuple[float, ...]
-) -> None:
-    """Send the player one opening turn and discard the answer, so a server that loads models
-    on demand has the model ready before the first game.
-
-    Raises:
-        TransportError: The player still failed after the transport retries.
-    """
-    await _call(player, start_request(game, max_turns=max_turns), backoff_s)
+        Raises:
+            TransportError: The player still failed after the transport retries.
+        """
+        await _call(player, self.start_request(max_turns=max_turns), backoff_s)
 
 
 async def _call(player: Player, request: TurnRequest, backoff_s: tuple[float, ...]) -> TurnResponse:
@@ -265,13 +317,13 @@ def _validate[S](
     if answer is None:
         raise IllegalMove(f"the answer does not match the answer format: {response.format_error}")
     if request.move_only and (answer.action != "move" or answer.offer_draw):
-        raise IllegalMove(f"{opening_notice()}; play a move")
+        raise IllegalMove(game.rejection(Rejection.MOVE_ONLY))
     if answer.action == "accept_draw" and not request.draw_offered:
-        raise IllegalMove("there is no draw offer to accept")
+        raise IllegalMove(game.rejection(Rejection.NO_DRAW_OFFER))
     if answer.action != "move":
         return answer, None
     if not answer.move:
-        raise IllegalMove("the action is move but no move was given")
+        raise IllegalMove(game.rejection(Rejection.NO_MOVE))
     return answer, game.parse_move(state, answer.move)
 
 

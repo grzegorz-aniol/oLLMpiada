@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import secrets
 import signal
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -14,16 +15,38 @@ from rich.logging import RichHandler
 from rich.markup import escape
 from rich.table import Column, Table
 
-from ollmpiada.competition import Competition, CompetitionEvent, CompetitionState, load_state
+from ollmpiada.competition import (
+    Competition,
+    CompetitionEvent,
+    CompetitionSetupError,
+    CompetitionState,
+    load_state,
+)
 from ollmpiada.config import ConfigError, Model, Settings, load_models, load_settings
-from ollmpiada.game_master import start_request
-from ollmpiada.games import GAMES
-from ollmpiada.games.base import Game, GameSetupError, IllegalMove, first_full_move
+from ollmpiada.game_master import GameMaster
+from ollmpiada.games.base import (
+    SAMPLE_SEED,
+    Game,
+    GameSetupError,
+    IllegalMove,
+    first_full_move,
+)
 from ollmpiada.players import PlayerError, create_player
 from ollmpiada.players.base import Player, TransportError, TurnRequest, TurnResponse
-from ollmpiada.tui import LiveView, PlainOutput, results_table, stats_table, summary_lines
+from ollmpiada.registry import MASTERS
+from ollmpiada.tui import (
+    LiveView,
+    PlainOutput,
+    board_table,
+    results_table,
+    stats_table,
+    summary_lines,
+)
 
 DEFAULT_MAX_TURNS = 50
+MIN_BOARDS = 8
+"""Boards (duplicate pairs of games) below which `run` warns that the comparison says little
+about skill, since a trick or two won on a few deals is mostly chance."""
 REFRESH_S = 1.0
 
 
@@ -33,20 +56,31 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("models", help="list configured models")
     probe = commands.add_parser(
-        "probe", help="send an opening and a later turn to a model, one per answer format"
+        "probe", help="send a model one turn per answer format of the game's start"
     )
     probe.add_argument("player", help="<model-id>[@effort]")
-    probe.add_argument("--game", choices=GAMES, default="chess")
+    probe.add_argument("--game", choices=MASTERS, default="chess")
     run = commands.add_parser("run", help="play a competition between two models")
     run.add_argument("first", help="<model-id>[@effort], plays the first side in odd games")
     run.add_argument("second", help="<model-id>[@effort]")
-    run.add_argument("--game", choices=GAMES, default="chess")
-    run.add_argument("--games", type=_positive, default=2, help="number of games (default 2)")
+    run.add_argument("--game", choices=MASTERS, default="chess")
+    run.add_argument(
+        "--games",
+        type=_positive,
+        default=2,
+        help="number of games, even for bridge (default 2)",
+    )
     run.add_argument(
         "--max-turns",
         type=_positive,
-        default=DEFAULT_MAX_TURNS,
-        help=f"moves per side before the game is adjudicated (default {DEFAULT_MAX_TURNS})",
+        help="moves per side before the game is adjudicated, for games with a turn limit "
+        f"(default {DEFAULT_MAX_TURNS})",
+    )
+    run.add_argument(
+        "--seed",
+        type=int,
+        help="start of games 1 and 2; each next pair of games takes the next value "
+        "(default: random, saved with the results)",
     )
     run.add_argument("--mode", choices=["visual", "background"], default="visual")
     show = commands.add_parser("show", help="print the results of a saved competition")
@@ -67,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         console.print(_models_table(models))
         return 0
     if args.command == "probe":
-        return _probe(console, settings, models, args.player, GAMES[args.game])
+        return _probe(console, settings, models, args.player, MASTERS[args.game])
     return _run(console, settings, models, args)
 
 
@@ -97,23 +131,32 @@ def _models_table(models: dict[str, Model]) -> Table:
     return table
 
 
+def _default_max_turns(game: Game) -> int | None:
+    return DEFAULT_MAX_TURNS if game.turn_limit else None
+
+
 def _probe(
-    console: Console, settings: Settings, models: dict[str, Model], name: str, game: Game
+    console: Console, settings: Settings, models: dict[str, Model], name: str, master: GameMaster
 ) -> int:
-    """Exit code 0 when the model answered both answer formats as expected: the move-only one
-    of the opening and the full one used from the first move after it."""
+    """Exit code 0 when the model answered every answer format of the game as expected: the
+    move-only one (in chess the opening) and the full one (from the first move after it)."""
     try:
         player = create_player(name, models, timeout_s=settings.request_timeout_s)
     except PlayerError as e:
         console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
         return 2
-    full = first_full_move()
-    requests = {
-        "Opening turn (move only)": start_request(game, max_turns=DEFAULT_MAX_TURNS),
-        f"Move {full} (full answer)": start_request(game, max_turns=DEFAULT_MAX_TURNS, turn=full),
-    }
-    console.print(f"Probing {name} with the opening position of {game.name}...")
-    return asyncio.run(_probe_turns(console, game, player, requests))
+    # One turn per answer format: a game whose turns are all move-only gets a single one.
+    turns: dict[bool, int] = {}
+    for turn in (1, first_full_move()):
+        turns.setdefault(master.game.move_only(turn), turn)
+    max_turns = _default_max_turns(master.game)
+    requests: dict[str, TurnRequest] = {}
+    for move_only, turn in turns.items():
+        label = "Opening turn" if turn == 1 else f"Move {turn}"
+        kind = "move only" if move_only else "full answer"
+        requests[f"{label} ({kind})"] = master.start_request(max_turns=max_turns, turn=turn)
+    console.print(f"Probing {name} with the opening position of {master.game.name}...")
+    return asyncio.run(_probe_turns(console, master.game, player, requests))
 
 
 async def _probe_turns(
@@ -144,7 +187,7 @@ def _probe_table(game: Game, request: TurnRequest, response: TurnResponse) -> Ta
         table.add_row("Parsed", escape(repr(response.answer)))
         if response.answer.action == "move":
             try:
-                move = game.parse_move(game.new_state(), response.answer.move or "")
+                move = game.parse_move(game.new_state(SAMPLE_SEED), response.answer.move or "")
                 table.add_row("Move", f"[green]legal[/green] ({request.legal_moves[move]})")
             except IllegalMove as e:
                 table.add_row("Move", f"[red]illegal:[/red] {escape(str(e))}")
@@ -173,60 +216,80 @@ def _run(
         console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
         return 2
 
-    game = GAMES[args.game]
+    master = MASTERS[args.game]
+    game = master.game
+    if args.max_turns is not None and not game.turn_limit:
+        console.print(f"[red]{game.name} has no turn limit;[/red] drop --max-turns.")
+        return 2
+    publish, live = _output(console, master, visual=args.mode == "visual")
+    try:
+        # Built before anything starts, so a rule it enforces (an even number of games for a
+        # duplicate game) stops the run with its own message.
+        competition = _competition(master, players, args, settings, publish)
+    except CompetitionSetupError as e:
+        console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
+        return 2
+    if game.duplicate and args.games < 2 * MIN_BOARDS:
+        console.print(
+            f"[yellow]Only {args.games // 2} of the {MIN_BOARDS} boards recommended:[/yellow] "
+            f"a few boards say little about skill (--games {2 * MIN_BOARDS} plays {MIN_BOARDS}).",
+            highlight=False,
+            soft_wrap=True,
+        )
     try:
         with game.session(settings):
-            state, run_dir = _play_competition(console, game, players, args, settings)
+            state = _play_competition(console, competition, live)
     except GameSetupError as e:
         console.print(f"[red]Cannot start {game.name}:[/red] {escape(str(e))}", highlight=False)
         return 2
 
-    for line in summary_lines(state):
-        console.print(line, highlight=False, soft_wrap=True)
-    console.print(f"Saved to {run_dir}", highlight=False, soft_wrap=True)
+    _print_summary(console, state, duplicate=game.duplicate)
+    console.print(f"Saved to {competition.run_dir}", highlight=False, soft_wrap=True)
     return 0 if state.status == "finished" else 1
 
 
+def _output(
+    console: Console, master: GameMaster, *, visual: bool
+) -> tuple[Callable[[CompetitionEvent], None], Live | None]:
+    """Where the competition publishes its events: the live view in a terminal, with the
+    `Live` display that shows it, else plain lines and no display."""
+    if not console.is_terminal:
+        return PlainOutput(console).handle, None
+    view = LiveView(master, visual=visual)
+    # Refreshing from the event loop (no refresh thread) never renders a board mid-update.
+    live = Live(view, console=console, auto_refresh=False)
+
+    def publish(event: CompetitionEvent) -> None:
+        view.handle(event)
+        live.refresh()
+
+    return publish, live
+
+
 def _play_competition(
-    console: Console,
-    game: Game,
-    players: tuple[Player, Player],
-    args: argparse.Namespace,
-    settings: Settings,
-) -> tuple[CompetitionState, Path]:
-    """Play with the live view in a terminal, else with plain lines; returns the final state
-    and the run folder."""
-    if console.is_terminal:
-        view = LiveView(game, visual=args.mode == "visual")
-        # Refreshing from the event loop (no refresh thread) never renders a board mid-update.
-        with Live(view, console=console, auto_refresh=False) as live, _log_to(console):
-
-            def publish(event: CompetitionEvent) -> None:
-                view.handle(event)
-                live.refresh()
-
-            competition = _competition(game, players, args, settings, publish)
-            state = asyncio.run(_play(competition, tick=live.refresh))
-    else:
-        plain = PlainOutput(console)
-        competition = _competition(game, players, args, settings, plain.handle)
-        state = asyncio.run(_play(competition))
-    return state, competition.run_dir
+    console: Console, competition: Competition, live: Live | None
+) -> CompetitionState:
+    """Play inside the `Live` display when there is one; returns the final state."""
+    if live is None:
+        return asyncio.run(_play(competition))
+    with live, _log_to(console):
+        return asyncio.run(_play(competition, tick=live.refresh))
 
 
 def _competition(
-    game: Game,
+    master: GameMaster,
     players: tuple[Player, Player],
     args: argparse.Namespace,
     settings: Settings,
     publish: Callable[[CompetitionEvent], None],
 ) -> Competition:
     return Competition(
-        game,
+        master,
         players,
         games=args.games,
-        max_turns=args.max_turns,
+        max_turns=args.max_turns or _default_max_turns(master.game),
         runs_dir=settings.runs_dir,
+        seed=secrets.randbelow(2**31) if args.seed is None else args.seed,
         publish=publish,
     )
 
@@ -263,9 +326,20 @@ def _show(console: Console, run_dir: Path) -> int:
         return 2
     console.print(results_table(state))
     console.print(stats_table(state))
+    if state.seed is not None:
+        console.print(f"Seed: {state.seed}", highlight=False)
+    master = MASTERS.get(state.game)
+    _print_summary(console, state, duplicate=master is not None and master.game.duplicate)
+    return 0
+
+
+def _print_summary(console: Console, state: CompetitionState, *, duplicate: bool) -> None:
+    """The board table of a game played in duplicate pairs, then the closing lines."""
+    boards = board_table(state) if duplicate else None
+    if boards is not None:
+        console.print(boards)
     for line in summary_lines(state):
         console.print(line, highlight=False, soft_wrap=True)
-    return 0
 
 
 @contextmanager

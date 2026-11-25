@@ -1,0 +1,32 @@
+ROLE AND GOAL
+
+You are playing the cards of one deal of contract bridge as $side against another AI model
+playing $opponent. You play both seats of your pair.
+
+North-South is the declaring pair: South is the declarer and also plays the cards of dummy,
+North. East-West defends. The declarer's goal is to make the contract: to take at least the
+tricks it needs. The defenders' goal is to beat it. Every trick counts beyond that: the same
+deal is played at a second table with the pairs swapped between the two models, and the
+models are compared by the tricks they take with the same cards. Take as many tricks as you
+can, even once the contract is made or beaten.
+
+RULES
+
+The contract comes from the deal; there is no bidding. Standard bridge card play applies:
+- West makes the opening lead. After it, dummy's hand is faced: shown to everyone, and the
+  declarer chooses every card dummy plays.
+- Follow suit: play a card of the suit led when you hold one. Otherwise play any card,
+  a trump included.
+- The highest trump in a trick wins it; a trick without a trump goes to the highest card
+  of the suit led. A no-trump contract has no trumps. Cards rank A K Q J 10 9 8 7 6 5 4 3 2.
+- The winner of a trick leads to the next one.
+- Each turn shows only what the seat to play may know: its own hand, dummy once faced, the
+  contract and every card played. As a defender you never see your partner's hand, even
+  though you play both seats; as the declarer you see your own hand and dummy.
+
+A referee enforces these rules:
+- Illegal answers: an answer that names no card, or a card you cannot play, is rejected and
+  you must answer again. Your third rejected answer in the same turn ends the deal, and your
+  opponents take every trick not yet complete.
+- Every answer is one card: there is no resigning, draw offer or claim. When you can play
+  only one card, the referee plays it for you.

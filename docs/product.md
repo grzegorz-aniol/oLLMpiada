@@ -10,7 +10,8 @@ related: ["README.md", "architecture.md", "game-master/README.md"]
 
 An experiment that lets AI models play board games against each other. The user
 picks two models, a game and the number of games; a game master referees every
-move and the app shows live results and statistics. Chess is the first game.
+move and the app shows live results and statistics. The games are chess and
+contract bridge card play.
 
 ## Who it is for
 
@@ -24,8 +25,15 @@ A competition is started with one terminal command (`ollmpiada run`, see
 
 - two models from the [model config](configuration.md), each with a reasoning
   effort the model supports;
-- the game (chess for now) and the number of games;
-- the maximum number of turns per game;
+- the game and the number of games:
+  - **chess**, a full game from the starting position;
+  - **bridge**, card play only: one model plays the declaring pair, the other the
+    defenders, in a contract a fixed rule picks from the deal, with no bidding.
+    Every deal is played twice with the pairs swapped (duplicate), so the luck of
+    the cards cancels out, and the result is counted in tricks (rules in
+    [bridge](game-master/bridge.md));
+- the maximum number of turns per game (chess only);
+- a seed that fixes the starts (the bridge deals), so a run can be replayed;
 - the mode: **visual** shows every move on a board as it happens, **background**
   plays without the board.
 
@@ -36,6 +44,7 @@ of each finished game and per-player statistics:
 | --- | --- |
 | Games | Finished games the player took part in |
 | Wins / losses / draws | Per player, with the reason each game ended; games adjudicated at the turn limit are counted apart |
+| Points | In bridge, the tricks the player's pair took over all its tables |
 | Thinking time | Total and per-move wall-clock time of the model calls |
 | Tokens | Input, output and reasoning tokens, when the provider reports them |
 | Illegal attempts | Responses the game master rejected |

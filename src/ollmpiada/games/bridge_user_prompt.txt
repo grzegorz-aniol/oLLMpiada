@@ -1,0 +1,11 @@
+POSITION
+
+$position
+
+LEGAL CARDS
+
+The cards you may play now: $legal_moves
+Choose exactly one card from this list.
+Before answering, check that your card appears in it, spelled as listed.
+
+$previous_attempt

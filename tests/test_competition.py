@@ -9,14 +9,22 @@ from ollmpiada.competition import (
     Competition,
     CompetitionFinished,
     CompetitionProgress,
+    CompetitionSetupError,
     load_state,
     prompt_version,
 )
-from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade
-from ollmpiada.games.base import Prompt
+from ollmpiada.game_master import (
+    AnswerReceived,
+    GameResult,
+    GameStarted,
+    MoveMade,
+    TurnBasedMaster,
+)
+from ollmpiada.games.base import Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
-from tests.fakes import WARM_UP, Judged, ScriptedPlayer
+from ollmpiada.players.llm import MoveAnswer, answer_type
+from tests.fakes import WARM_UP, Judged, MovesOnly, ScriptedPlayer, SeededStart
 
 RESIGN = TurnAnswer(action="resign")
 
@@ -38,7 +46,7 @@ def run(players, tmp_path, *, games=2, on_event=None, game=None, max_turns=20):
             on_event(competition, event)
 
     competition = Competition(
-        game or ChessGame(),
+        TurnBasedMaster(game or ChessGame()),
         players,
         games=games,
         max_turns=max_turns,
@@ -95,11 +103,14 @@ def test_results_are_saved_after_every_game(tmp_path):
     assert summary["game"] == "chess" and summary["games"] == 2 and summary["max_turns"] == 20
     assert summary["prompt_version"] == prompt_version(ChessGame())
     assert summary["stats"]["model-b"]["wins"] == 2
+    # Chess has no points, so its files have no points fields.
+    assert "points" not in summary["stats"]["model-b"] and "points" not in summary["results"][0]
 
     pgn = (run_dir / "game-001.pgn").read_text()
     assert '[White "model-a@high"]' in pgn and "Qh4# 0-1" in pgn
     game = read_json(run_dir / "game-001.json")
     assert game["reason"] == "checkmate" and game["side_names"] == ["White", "Black"]
+    assert "points" not in game
     first = game["turns"][0]
     assert first["move"] == "f3" and first["attempts"][0]["elapsed_s"] == 1.0
     assert first["attempts"][0]["usage"]["input_tokens"] == 100
@@ -135,6 +146,15 @@ def test_adjudicated_results_are_counted_apart_from_results_on_the_board(tmp_pat
     assert '[Termination "adjudication"]' in pgn
     assert pgn.strip().endswith("1. e4 e5 { Stockfish: #-2 } 0-1")
     assert load_state(run_dir) == state
+
+
+def test_a_game_without_a_turn_limit_saves_none_and_loads_it_back(tmp_path):
+    state, competition, _ = compete(
+        ["a", "a", "a"], ["b", "b", "b"], tmp_path, games=1, game=MovesOnly(), max_turns=None
+    )
+    assert state.status == "finished" and state.results[0].reason == "count"
+    assert read_json(competition.run_dir / "competition.json")["max_turns"] is None
+    assert load_state(competition.run_dir).max_turns is None
 
 
 def test_illegal_attempts_and_illegal_answer_losses_are_counted(tmp_path):
@@ -184,8 +204,8 @@ def test_an_existing_run_folder_is_not_reused(tmp_path):
 
 def test_players_must_have_different_names(tmp_path):
     same = (ScriptedPlayer("x", []), ScriptedPlayer("x", []))
-    with pytest.raises(ValueError, match="both players are named 'x'"):
-        Competition(ChessGame(), same, games=1, max_turns=1, runs_dir=tmp_path)
+    with pytest.raises(CompetitionSetupError, match="both players are named 'x'"):
+        Competition(TurnBasedMaster(ChessGame()), same, games=1, max_turns=1, runs_dir=tmp_path)
 
 
 def test_transport_failure_aborts_the_competition(tmp_path):
@@ -308,6 +328,12 @@ def test_progress_events_carry_the_state(tmp_path):
     assert sum(isinstance(e, MoveMade) for e in events) == 5
 
 
+@pytest.mark.opening
+def test_prompt_version_of_chess_is_pinned():
+    # A refactor that changes what the chess models read must show up here.
+    assert prompt_version(ChessGame()) == "6a8b3b041589"
+
+
 @pytest.mark.parametrize(
     ("template", "old", "new"),
     [("system_template", "win", "triumph"), ("user_template", "Before answering", "First")],
@@ -318,6 +344,21 @@ def test_prompt_version_follows_the_wording_of_both_parts(template, old, new):
     assert len(version) == 12 and version == prompt_version(ChessGame())
     setattr(game, template, getattr(game, template).replace(old, new))
     assert prompt_version(game) != version
+
+
+@pytest.mark.opening
+@pytest.mark.parametrize("move_only", [True, False], ids=["opening-schema", "full-schema"])
+def test_prompt_version_covers_the_answer_schema_of_both_sample_turns(monkeypatch, move_only):
+    version = prompt_version(ChessGame())
+
+    class Reworded(MoveAnswer):
+        """Another description."""
+
+    def reworded(flag):
+        return Reworded if flag == move_only else answer_type(flag)
+
+    monkeypatch.setattr("ollmpiada.competition.answer_type", reworded)
+    assert prompt_version(ChessGame()) != version
 
 
 def test_prompt_version_covers_the_no_offer_wording(monkeypatch):
@@ -340,24 +381,144 @@ def test_prompt_version_tells_the_system_and_user_parts_apart(monkeypatch):
         monkeypatch.setattr(ChessGame, "prompt", lambda self, ctx: extend(original(self, ctx)))
         return prompt_version(ChessGame())
 
-    in_system = version_with(lambda p: Prompt(p.system + "Extra.\n", p.user))
-    in_user = version_with(lambda p: Prompt(p.system, "Extra.\n" + p.user))
+    in_system = version_with(lambda p: dataclasses.replace(p, system=p.system + "Extra.\n"))
+    in_user = version_with(lambda p: dataclasses.replace(p, user="Extra.\n" + p.user))
     assert in_system != in_user
 
 
 def test_prompt_version_covers_the_llm_answer_format(monkeypatch):
     version = prompt_version(ChessGame())
-    monkeypatch.setattr("ollmpiada.players.llm.ANSWER_FORMAT", "ANSWER IN JSON")
+    monkeypatch.setattr("ollmpiada.games.chess_game.ANSWER_FORMAT", "ANSWER IN JSON")
     assert prompt_version(ChessGame()) != version
 
 
 @pytest.mark.opening
 def test_prompt_version_covers_the_move_only_answer_format(monkeypatch):
     version = prompt_version(ChessGame())
-    monkeypatch.setattr("ollmpiada.players.llm.MOVE_ONLY_ANSWER_FORMAT", "ANSWER WITH A MOVE")
+    monkeypatch.setattr("ollmpiada.games.chess_game.MOVE_ONLY_ANSWER_FORMAT", "ANSWER WITH A MOVE")
     assert prompt_version(ChessGame()) != version
 
 
 def test_first_selected_model_plays_first_side_in_odd_games(tmp_path):
     state, _, _ = compete([RESIGN, RESIGN, RESIGN], ["e4"], tmp_path, games=3)
     assert [r.players[0] for r in state.results] == ["model-a@high", "model-b", "model-a@high"]
+
+
+class StubMaster:
+    """A game master that plays nothing: it returns prepared outcomes and records its calls."""
+
+    def __init__(self, *outcomes: Outcome, game: ChessGame | None = None) -> None:
+        self.game = game or ChessGame()
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple] = []
+
+    async def play(self, players, *, number, seed, max_turns, publish, backoff_s):
+        names = (players[0].name, players[1].name)
+        self.calls.append(("play", number, seed, max_turns, names))
+        return GameResult(number, names, self.outcomes.pop(0), state=self.game.new_state(seed))
+
+    def start_request(self, *, max_turns, turn=1):
+        raise AssertionError("the runner never builds a turn request itself")
+
+    async def warm_up(self, player, *, max_turns, backoff_s):
+        self.calls.append(("warm_up", player.name))
+
+
+def test_the_runner_depends_only_on_the_game_master_protocol(tmp_path):
+    # Empty scripts: any call the runner made to a player directly would fail the test.
+    players = (ScriptedPlayer("model-a", []), ScriptedPlayer("model-b", []))
+    master = StubMaster(Outcome(Side.FIRST, "checkmate"), Outcome(None, "draw agreed"))
+    competition = Competition(
+        master, players, games=2, max_turns=7, runs_dir=tmp_path, backoff_s=(0,)
+    )
+    state = asyncio.run(competition.run())
+
+    assert master.calls == [
+        ("warm_up", "model-b"),
+        ("warm_up", "model-a"),
+        ("play", 1, 0, 7, ("model-a", "model-b")),
+        ("play", 2, 0, 7, ("model-b", "model-a")),
+    ]
+    assert state.status == "finished"
+    assert [(r.winner, r.result, r.reason) for r in state.results] == [
+        ("model-a", "1-0", "checkmate"),
+        (None, "1/2-1/2", "draw agreed"),
+    ]
+    assert (state.stats["model-a"].wins, state.stats["model-a"].draws) == (1, 1)
+    saved = {path.name for path in competition.run_dir.iterdir()}
+    assert saved == {
+        "competition.json",
+        "game-001.json",
+        "game-001.pgn",
+        "game-002.json",
+        "game-002.pgn",
+    }
+
+
+def run_stub(master, tmp_path, *, games, seed):
+    players = (ScriptedPlayer("model-a", []), ScriptedPlayer("model-b", []))
+    competition = Competition(
+        master, players, games=games, max_turns=7, runs_dir=tmp_path, seed=seed, backoff_s=(0,)
+    )
+    return asyncio.run(competition.run()), competition
+
+
+def test_each_pair_of_games_shares_a_seed_and_the_next_pair_takes_the_next(tmp_path):
+    master = StubMaster(*[Outcome(Side.FIRST, "checkmate")] * 4)
+    run_stub(master, tmp_path, games=4, seed=41)
+    plays = [call for call in master.calls if call[0] == "play"]
+    assert [(number, seed, names) for _, number, seed, _, names in plays] == [
+        (1, 41, ("model-a", "model-b")),
+        (2, 41, ("model-b", "model-a")),
+        (3, 42, ("model-a", "model-b")),
+        (4, 42, ("model-b", "model-a")),
+    ]
+
+
+def test_each_record_names_the_start_its_pair_of_games_shares(tmp_path):
+    master = StubMaster(*[Outcome(Side.FIRST, "count")] * 4, game=MovesOnly())
+    _, competition = run_stub(master, tmp_path, games=4, seed=41)
+    records = [(competition.run_dir / f"game-00{n}.txt").read_text() for n in range(1, 5)]
+    assert records == ["start 1: ", "start 1: ", "start 2: ", "start 2: "]
+
+
+def test_the_seed_is_saved_and_loaded(tmp_path):
+    master = StubMaster(Outcome(None, "draw agreed"))
+    state, competition = run_stub(master, tmp_path, games=1, seed=7)
+    path = competition.run_dir / "competition.json"
+    assert read_json(path)["seed"] == 7
+    assert load_state(competition.run_dir) == state and state.seed == 7
+
+    without_seed = read_json(path)
+    del without_seed["seed"]
+    path.write_text(json.dumps(without_seed))
+    assert load_state(competition.run_dir).seed is None
+
+
+@pytest.mark.parametrize(
+    ("seed", "order"),
+    [(0, ["model-b", "model-a"]), (1, ["model-a", "model-b"])],
+    ids=["first-side-moves-first", "second-side-moves-first"],
+)
+def test_the_player_who_moves_first_in_game_one_warms_up_last(tmp_path, seed, order):
+    # SeededStart gives the first move to the second side (Black) for an odd seed.
+    master = StubMaster(Outcome(None, "draw agreed"), game=SeededStart())
+    run_stub(master, tmp_path, games=1, seed=seed)
+    assert [call[1] for call in master.calls if call[0] == "warm_up"] == order
+
+
+def test_points_are_summed_per_player_over_its_side_across_swapped_games(tmp_path):
+    # A duplicate pair: model-a's side takes 9 of 13 in game 1 and model-b's side 7 in game 2,
+    # so model-a scores 9 + (13 - 7) and model-b (13 - 9) + 7.
+    master = StubMaster(
+        Outcome(Side.FIRST, "made", points=(9, 4)), Outcome(Side.SECOND, "down", points=(7, 6))
+    )
+    state, competition = run_stub(master, tmp_path, games=2, seed=0)
+
+    assert [r.result for r in state.results] == ["9-4", "7-6"]
+    assert (state.stats["model-a"].points, state.stats["model-b"].points) == (15, 11)
+    assert (state.stats["model-a"].wins, state.stats["model-a"].losses) == (2, 0)
+    saved = read_json(competition.run_dir / "competition.json")
+    assert saved["stats"]["model-a"]["points"] == 15 and saved["results"][1]["points"] == [7, 6]
+    assert read_json(competition.run_dir / "game-002.json")["points"] == [7, 6]
+    assert load_state(competition.run_dir) == state

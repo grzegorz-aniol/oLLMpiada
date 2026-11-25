@@ -6,8 +6,11 @@ import pytest
 
 import ollmpiada
 from ollmpiada.cli import main
+from ollmpiada.game_master import TurnBasedMaster
+from ollmpiada.games.base import SAMPLE_SEED
 from ollmpiada.players.base import TransportError
-from tests.fakes import ScriptedPlayer, unreadable
+from ollmpiada.registry import MASTERS
+from tests.fakes import MovesOnly, ScriptedPlayer, unreadable
 
 
 def models_rows(out: str) -> dict[str, list[str]]:
@@ -70,7 +73,7 @@ def test_entry_point_loads_dotenv_but_shell_values_win(
 def probe_with(monkeypatch, models_file):
     """Run `probe` against a scripted player instead of a real model."""
 
-    def run(*script, name="local-llm@high"):
+    def run(*script, name="local-llm@high", game="chess"):
         player = ScriptedPlayer(name, list(script))
         created = []
 
@@ -79,7 +82,7 @@ def probe_with(monkeypatch, models_file):
             return player
 
         monkeypatch.setattr("ollmpiada.cli.create_player", fake_create)
-        code = main(["probe", name])
+        code = main(["probe", name, "--game", game])
         return code, player, created
 
     return run
@@ -100,6 +103,26 @@ def test_probe_checks_the_opening_and_the_full_answer_format(probe_with, capsys)
         assert len(request.legal_moves) == 20 and not request.draw_offered
         assert "as White" in request.prompt.system
     assert "move 1 of 50" in opening.prompt.user and "move 6 of 50" in later.prompt.user
+
+
+@pytest.mark.opening
+def test_probe_asks_a_game_with_one_answer_format_once(probe_with, monkeypatch, capsys):
+    monkeypatch.setitem(MASTERS, "moves-only", TurnBasedMaster(MovesOnly()))
+    code, player, _ = probe_with("a", "b", game="moves-only")
+    out = capsys.readouterr().out
+    assert code == 0 and "Opening turn (move only)" in out and "legal (a)" in out
+    assert [r.move_only for r in player.requests] == [True]
+
+
+def test_probe_of_bridge_asks_for_the_opening_lead_once(probe_with, capsys):
+    bridge = MASTERS["bridge"].game
+    lead = next(iter(bridge.legal_moves(bridge.new_state(SAMPLE_SEED)).values()))
+    code, player, _ = probe_with(lead, game="bridge")
+    out = capsys.readouterr().out
+    assert code == 0 and "opening position of bridge" in out and f"legal ({lead})" in out
+    (request,) = player.requests
+    assert request.move_only and len(request.legal_moves) == 13
+    assert "as East-West" in request.prompt.system
 
 
 def test_probe_reports_an_illegal_move(probe_with, capsys):

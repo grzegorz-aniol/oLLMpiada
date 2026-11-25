@@ -7,23 +7,22 @@ import pytest
 from rich.console import Console
 
 from ollmpiada.config import load_settings
-from ollmpiada.games import GAMES
 from ollmpiada.games.base import (
     OPENING_MOVES,
     GameSetupError,
     IllegalMove,
     Outcome,
-    PromptContext,
     Side,
 )
 from ollmpiada.games.chess_game import ADJUDICATION_WIN_CP, DARK_LAST, LIGHT_LAST
+from ollmpiada.registry import MASTERS
 
-game = GAMES["chess"]
+game = MASTERS["chess"].game
 STOCKFISH = load_settings().stockfish
 
 
 def play(*moves: str) -> chess.Board:
-    state = game.new_state()
+    state = game.new_state(0)
     for move in moves:
         state = game.apply(state, game.parse_move(state, move))
     return state
@@ -36,7 +35,7 @@ def test_registry_and_side_names():
 
 
 def test_opening_position():
-    state = game.new_state()
+    state = game.new_state(0)
     assert game.side_to_move(state) is Side.FIRST
     legal = game.legal_moves(state)
     assert len(legal) == 20
@@ -45,7 +44,7 @@ def test_opening_position():
 
 
 def test_move_groups_are_one_per_origin_square_named_by_piece():
-    state = game.new_state()
+    state = game.new_state(0)
     groups = game.move_groups(state)
     assert len(groups) == 10
     assert groups["knight_g1"] == {"g1f3": "Nf3", "g1h3": "Nh3"}
@@ -61,7 +60,7 @@ def test_move_groups_are_one_per_origin_square_named_by_piece():
 
 
 def test_apply_returns_a_new_state():
-    state = game.new_state()
+    state = game.new_state(0)
     after = game.apply(state, "e2e4")
     assert state.fen() == chess.STARTING_FEN
     assert game.side_to_move(after) is Side.SECOND
@@ -108,7 +107,7 @@ def test_insufficient_material_is_a_draw():
     ],
 )
 def test_parse_opening_move_variants(text, move_id):
-    assert game.parse_move(game.new_state(), text) == move_id
+    assert game.parse_move(game.new_state(0), text) == move_id
 
 
 @pytest.mark.parametrize(
@@ -140,7 +139,7 @@ def test_parse_opening_move_variants(text, move_id):
     ],
 )
 def test_parse_tolerates_move_numbers_wrappers_punctuation_and_split_squares(text):
-    assert game.parse_move(game.new_state(), text) == "e2e4"
+    assert game.parse_move(game.new_state(0), text) == "e2e4"
 
 
 def test_parse_strips_a_move_number_before_san():
@@ -240,7 +239,7 @@ def test_disambiguated_san_is_accepted():
 )
 def test_illegal_or_unreadable_moves_are_rejected(text):
     with pytest.raises(IllegalMove, match="not a legal move"):
-        game.parse_move(game.new_state(), text)
+        game.parse_move(game.new_state(0), text)
 
 
 def test_describe_has_fen_board_with_coordinates_recent_moves_and_check():
@@ -256,7 +255,7 @@ def test_describe_has_fen_board_with_coordinates_recent_moves_and_check():
 
 
 def test_describe_of_the_first_move_has_no_recent_moves():
-    text = game.describe(game.new_state())
+    text = game.describe(game.new_state(0))
     assert "Recent moves: none yet" in text
     assert "Halfmove clock: 0 (automatic draw at 100)" in text
     assert "Last move" not in text and "occurred" not in text
@@ -297,7 +296,7 @@ def test_render_shows_pieces_coordinates_and_highlights_last_move():
 
 def test_record_is_pgn_with_players_result_and_reason():
     state = play("f3", "e5", "g4", "Qh4#")
-    pgn = game.record(state, game.outcome(state), ("model-a", "model-b@high"))
+    pgn = game.record(state, game.outcome(state), ("model-a", "model-b@high"), 1)
     assert game.record_extension == "pgn"
     assert '[White "model-a"]' in pgn and '[Black "model-b@high"]' in pgn
     assert '[Result "0-1"]' in pgn and '[Termination "checkmate"]' in pgn
@@ -306,26 +305,24 @@ def test_record_is_pgn_with_players_result_and_reason():
 
 def test_record_of_resigned_and_unfinished_games():
     state = play("e4")
-    resigned = game.record(state, Outcome(Side.FIRST, "resignation"), ("a", "b"))
+    resigned = game.record(state, Outcome(Side.FIRST, "resignation"), ("a", "b"), 1)
     assert '[Result "1-0"]' in resigned and "Stockfish" not in resigned
-    assert '[Result "*"]' in game.record(state, None, ("a", "b"))
+    assert '[Result "*"]' in game.record(state, None, ("a", "b"), 1)
 
 
 @pytest.mark.opening
 @pytest.mark.parametrize("turn", [2, OPENING_MOVES + 1], ids=["opening", "later"])
 def test_prompt_differs_between_sides_only_in_side_words(turn):
     state = play("e4", "e5")
-    white = PromptContext(
-        side=Side.FIRST,
-        position=game.describe(state),
-        legal_moves=list(game.legal_moves(state).values()),
+    white = game.context(
+        state,
         turn=turn,
         max_turns=40,
         # No draw offer can be pending in the opening.
         draw_offered=turn > OPENING_MOVES,
         rejection='"Ke3" is not a legal move in this position',
     )
-    black = PromptContext(**{**white.__dict__, "side": Side.SECOND})
+    black = dataclasses.replace(white, side=Side.SECOND)
     both = {("White", "Black"), ("Black", "White")}
     # In the opening no draw offer is pending, so the user part never names the opponent.
     expected = {"system": both, "user": both if turn > OPENING_MOVES else {("White", "Black")}}
@@ -342,14 +339,7 @@ def sections(text: str) -> list[str]:
 
 
 def test_prompt_puts_rules_in_system_and_the_turn_in_user():
-    state = game.new_state()
-    ctx = PromptContext(
-        side=Side.FIRST,
-        position=game.describe(state),
-        legal_moves=list(game.legal_moves(state).values()),
-        turn=1,
-        max_turns=40,
-    )
+    ctx = game.context(game.new_state(0), turn=1, max_turns=40)
     prompt = game.prompt(ctx)
     assert sections(prompt.system) == ["ROLE AND GOAL", "RULES"]
     assert "playing a game of chess as White" in prompt.system and "win" in prompt.system
@@ -372,7 +362,7 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
     assert "$" not in prompt.system + prompt.user
     assert prompt.text == f"{prompt.system}\n{prompt.user}"
 
-    retry = game.prompt(PromptContext(**{**ctx.__dict__, "rejection": "illegal move Ke2"}))
+    retry = game.prompt(dataclasses.replace(ctx, rejection="illegal move Ke2"))
     assert retry.system == prompt.system
     assert sections(retry.user) == ["POSITION", "LEGAL MOVES", "PREVIOUS ATTEMPT"]
     assert retry.user.rstrip().endswith("Answer again with a legal move.")
@@ -381,15 +371,9 @@ def test_prompt_puts_rules_in_system_and_the_turn_in_user():
 
 @pytest.mark.opening
 def test_prompt_states_the_opening_rule_and_offers_resigning_only_after_it():
-    state = game.new_state()
-    ctx = PromptContext(
-        side=Side.SECOND,
-        position=game.describe(state),
-        legal_moves=list(game.legal_moves(state).values()),
-        turn=OPENING_MOVES,
-        max_turns=40,
-    )
-    later_ctx = dataclasses.replace(ctx, turn=OPENING_MOVES + 1)
+    state = play("e4")
+    ctx = game.context(state, turn=OPENING_MOVES, max_turns=40)
+    later_ctx = game.context(state, turn=OPENING_MOVES + 1, max_turns=40)
     assert ctx.move_only and not later_ctx.move_only
     last_opening, later = game.prompt(ctx), game.prompt(later_ctx)
     assert "you cannot resign or offer a draw during your first 5 moves" in last_opening.system
@@ -399,6 +383,20 @@ def test_prompt_states_the_opening_rule_and_offers_resigning_only_after_it():
         "move 6." in last_opening.user
     )
     assert "Unless you resign or accept a draw, choose exactly one move" in later.user
+
+
+@pytest.mark.opening
+def test_answer_format_asks_for_the_move_alone_in_the_opening_and_names_the_legal_list():
+    state = game.new_state(0)
+    opening = game.prompt(game.context(state, turn=1, max_turns=40))
+    later = game.prompt(game.context(state, turn=OPENING_MOVES + 1, max_turns=40))
+    assert "one field: move" in opening.answer_format
+    assert not re.search("resign|draw", opening.answer_format)
+    assert "three fields: action (move, resign or accept_draw)" in later.answer_format
+    assert "offer_draw" in later.answer_format
+    for prompt in (opening, later):
+        named = re.search(r"listed under ([A-Z][A-Z ]+[A-Z])", prompt.answer_format)
+        assert named is not None and named[1] in sections(prompt.user)
 
 
 # --- adjudication at the turn limit (score mapping: test_game_master.py) ---

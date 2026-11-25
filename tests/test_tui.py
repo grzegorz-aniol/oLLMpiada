@@ -16,18 +16,29 @@ from ollmpiada.competition import (
     Competition,
     CompetitionFinished,
     CompetitionProgress,
+    CompetitionState,
+    GameSummary,
+    PlayerStats,
     load_state,
 )
-from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade
-from ollmpiada.games import GAMES
+from ollmpiada.game_master import AnswerReceived, GameStarted, MoveMade, TurnBasedMaster
 from ollmpiada.games.base import Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer, TurnResponse, Usage
-from ollmpiada.tui import LiveView, results_table, stats_table
-from tests.fakes import WARM_UP, Judged, ScriptedPlayer
+from ollmpiada.registry import MASTERS
+from ollmpiada.tui import (
+    LiveView,
+    board_table,
+    game_line,
+    results_table,
+    stats_table,
+    summary_lines,
+)
+from tests.fakes import WARM_UP, Judged, MovesOnly, PickingPlayer, ScriptedPlayer
 
 RESIGN = TurnAnswer(action="resign")
+CHESS = TurnBasedMaster(ChessGame())
 REAL_SESSION = ChessGame.session
 # Game 1: the first player is White and gets mated; game 2: it plays Black and resigns.
 FIRST_SCRIPT = ["f3", "g4", RESIGN]
@@ -61,6 +72,11 @@ def render(renderable) -> str:
     return console.export_text()
 
 
+def squeezed(text: str) -> list[str]:
+    """The lines of `text` with each run of spaces as one, to compare table rows."""
+    return [" ".join(line.split()) for line in text.splitlines()]
+
+
 # --- run command; under capsys stdout is not a terminal, so output is plain ---
 
 
@@ -79,7 +95,7 @@ def test_run_prints_one_line_per_game_and_a_summary(scripted, models_file, capsy
 
 
 def test_run_presents_adjudicated_results_apart(scripted, models_file, monkeypatch, capsys):
-    monkeypatch.setitem(GAMES, "chess", Judged(Cp(-650)))
+    monkeypatch.setitem(MASTERS, "chess", TurnBasedMaster(Judged(Cp(-650))))
     scripted.update({"local-llm": ["e4"], "basal-mini": ["e5"]})
     assert main(["run", "local-llm", "basal-mini", "--games", "1", "--max-turns", "1"]) == 0
     lines = capsys.readouterr().out.splitlines()
@@ -91,9 +107,77 @@ def test_run_presents_adjudicated_results_apart(scripted, models_file, monkeypat
     state = load_state(saved_runs(models_file)[0])
     assert "adjudication: -650 cp" in render(results_table(state))
     stats = render(stats_table(state)).splitlines()
-    assert "Adj. W/L/D" in next(line for line in stats if "Games" in line)
+    header = next(line for line in stats if "Games" in line)
+    assert "Adj. W/L/D" in header and "Points" not in header
     basal = next(line for line in stats if line.split()[:1] == ["basal-mini"])
     assert basal.split()[1:6] == ["1", "0", "0", "0", "1/0/0"]
+
+
+def test_points_get_a_column_and_a_summary_entry_when_a_counted_game_has_them():
+    a = PlayerStats("model-a", games=2, wins=1, losses=1, points=15)
+    b = PlayerStats("model-b", games=2, wins=1, losses=1, points=11)
+    made = GameSummary(1, ("model-a", "model-b"), "model-a", "9-4", "made", 13, points=(9, 4))
+    state = CompetitionState(
+        game="cards",
+        side_names=("North-South", "East-West"),
+        players=("model-a", "model-b"),
+        games=2,
+        max_turns=None,
+        seed=1,
+        stats={"model-a": a, "model-b": b},
+        results=[made],
+    )
+    stats = render(stats_table(state)).splitlines()
+    assert "Points" in next(line for line in stats if "Games" in line)
+    a_row = next(line for line in stats if line.split()[:1] == ["model-a"])
+    assert a_row.split()[1:7] == ["2", "1", "1", "0", "0/0/0", "15"]
+    assert (
+        "model-b: 1 wins, 1 losses, 0 draws; adjudicated 0 wins, 0 losses, 0 draws; 11 points"
+    ) in summary_lines(state)
+    assert game_line(made, state.side_names) == (
+        "game 1: North-South model-a vs East-West model-b: 9-4 (made), 13 moves"
+    )
+
+
+def board_state(*tables: tuple[int, int]) -> CompetitionState:
+    """A duplicate competition whose games took these points in side order, model-a playing
+    the first side in odd games."""
+    names = ("model-a", "model-b")
+    results = [
+        GameSummary(n, names if n % 2 else names[::-1], None, "-", "made", 52, points=points)
+        for n, points in enumerate(tables, start=1)
+    ]
+    return CompetitionState(
+        game="cards",
+        side_names=("North-South", "East-West"),
+        players=names,
+        games=len(tables),
+        max_turns=None,
+        seed=1,
+        stats={name: PlayerStats(name) for name in names},
+        results=results,
+    )
+
+
+def test_the_board_table_shows_both_tables_and_a_tie_when_they_took_the_same_points():
+    # Board 1: model-a takes 9 as North-South, model-b 7; board 2: both take 6.
+    state = board_state((9, 4), (7, 6), (6, 7), (6, 7), (5, 8))
+    rows = squeezed(render(board_table(state)))
+    assert "Board model-a model-b Result" in rows
+    assert "1 9 + 6 4 + 7 model-a by 4" in rows
+    assert "2 6 + 7 7 + 6 tie" in rows
+    # Board 3 has one table so far, so it has no result yet.
+    assert not any(row.startswith("3 ") for row in rows)
+
+
+def test_the_board_table_names_the_second_player_when_it_wins_the_board():
+    state = board_state((8, 5), (10, 3))
+    assert "1 8 + 3 5 + 10 model-b by 4" in squeezed(render(board_table(state)))
+
+
+def test_there_is_no_board_table_before_a_board_has_both_tables():
+    assert board_table(board_state()) is None
+    assert board_table(board_state((9, 4))) is None
 
 
 def test_run_stops_before_any_model_call_when_the_engine_cannot_start(
@@ -240,6 +324,150 @@ def test_show_prints_a_saved_competition(scripted, models_file, capsys):
     out = capsys.readouterr().out
     assert "Results" in out and "Statistics" in out and "checkmate" in out
     assert "Competition finished: 2 of 2 games played." in out
+    assert "Boards" not in out
+
+
+def test_run_saves_the_given_seed_and_show_prints_it(scripted, models_file, capsys):
+    scripted.update({"local-llm": [RESIGN], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini", "--games", "1", "--seed", "7"]) == 0
+    run_dir = saved_runs(models_file)[0]
+    assert json.loads((run_dir / "competition.json").read_text())["seed"] == 7
+    capsys.readouterr()
+    assert main(["show", str(run_dir)]) == 0
+    assert "Seed: 7" in capsys.readouterr().out
+
+
+def test_run_without_a_seed_saves_a_random_31_bit_one(scripted, models_file, monkeypatch):
+    bounds = []
+    monkeypatch.setattr("ollmpiada.cli.secrets.randbelow", lambda n: bounds.append(n) or n - 1)
+    scripted.update({"local-llm": [RESIGN], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini", "--games", "1"]) == 0
+    saved = json.loads((saved_runs(models_file)[0] / "competition.json").read_text())
+    assert bounds == [2**31] and saved["seed"] == 2**31 - 1
+
+
+@pytest.mark.parametrize(
+    ("game", "flags", "saved"),
+    [("chess", [], 50), ("chess", ["--max-turns", "7"], 7), ("moves-only", [], None)],
+)
+def test_run_saves_the_turn_limit_of_its_game(
+    scripted, models_file, monkeypatch, game, flags, saved
+):
+    monkeypatch.setitem(MASTERS, "moves-only", TurnBasedMaster(MovesOnly()))
+    scripted.update({"local-llm": [RESIGN, "a", "a", "a"], "basal-mini": ["b", "b", "b"]})
+    args = ["run", "local-llm", "basal-mini", "--games", "1", "--game", game, *flags]
+    assert main(args) == 0
+    run_dir = saved_runs(models_file)[0]
+    assert json.loads((run_dir / "competition.json").read_text())["max_turns"] == saved
+
+
+def test_run_rejects_a_turn_limit_for_a_game_without_one(
+    scripted, models_file, monkeypatch, capsys
+):
+    monkeypatch.setitem(MASTERS, "moves-only", TurnBasedMaster(MovesOnly()))
+    scripted.update({"local-llm": [], "basal-mini": []})
+    assert main(["run", "local-llm", "basal-mini", "--game", "moves-only", "--max-turns", "9"]) == 2
+    assert "moves-only has no turn limit" in capsys.readouterr().out
+    assert saved_runs(models_file) == []
+
+
+@pytest.fixture
+def card_players(monkeypatch, models_file):
+    """Make `run` use players that pick a card from the legal list: local-llm the first
+    listed, basal-mini the last."""
+
+    def fake_create(name, models, *, timeout_s):
+        resolve_player(name, models)
+        return PickingPlayer(name, 0 if name == "local-llm" else -1)
+
+    monkeypatch.setattr("ollmpiada.cli.create_player", fake_create)
+    monkeypatch.setitem(Competition.__init__.__kwdefaults__, "backoff_s", (0, 0))
+
+
+def test_run_plays_bridge_and_show_prints_its_points(card_players, models_file, capsys):
+    args = ["run", "local-llm", "basal-mini", "--game", "bridge", "--seed", "2"]
+    assert main(args) == 0
+    lines = squeezed(capsys.readouterr().out)
+    assert lines[1:3] == [
+        "game 1: North-South local-llm vs East-West basal-mini: 9-4 (made), 52 moves",
+        "game 2: North-South basal-mini vs East-West local-llm: 7-6 (down), 52 moves",
+    ]
+    # local-llm makes its contract and beats basal-mini's: two wins, 9 + (13 - 7) tricks.
+    totals = "adjudicated 0 wins, 0 losses, 0 draws"
+    assert f"local-llm: 2 wins, 0 losses, 0 draws; {totals}; 15 points" in lines
+    assert f"basal-mini: 0 wins, 2 losses, 0 draws; {totals}; 11 points" in lines
+    # The board: local-llm took 9 tricks at the first table and 13 - 7 at the second.
+    board = "1 9 + 6 4 + 7 local-llm by 4"
+    assert lines.index(board) < lines.index("Competition finished: 2 of 2 games played.")
+    run_dir = saved_runs(models_file)[0]
+    assert sorted(path.name for path in run_dir.glob("game-*")) == [
+        "game-001.json", "game-001.pbn", "game-002.json", "game-002.pbn",
+    ]  # fmt: skip
+    saved = json.loads((run_dir / "competition.json").read_text())
+    assert saved["game"] == "bridge" and saved["max_turns"] is None
+    capsys.readouterr()
+    assert main(["show", str(run_dir)]) == 0
+    out = capsys.readouterr().out
+    assert "9-4" in out and "Seed: 2" in out and "15 points" in out
+    assert board in squeezed(out)
+
+
+def test_run_shows_bridge_in_the_live_view(card_players, monkeypatch, capsys):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert main(["run", "local-llm", "basal-mini", "--game", "bridge", "--seed", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "Statistics" in out and "North-South" in out and "game 1:" not in out
+    assert "Boards" in out
+
+
+@pytest.mark.parametrize(("games", "warned"), [("2", True), ("14", True), ("16", False)])
+def test_run_warns_before_a_bridge_run_of_fewer_than_eight_boards(
+    card_players, capsys, games, warned
+):
+    assert main(["run", "local-llm", "basal-mini", "--game", "bridge", "--games", games]) == 0
+    lines = squeezed(capsys.readouterr().out)
+    warning = (
+        f"Only {int(games) // 2} of the 8 boards recommended: "
+        "a few boards say little about skill (--games 16 plays 8)."
+    )
+    assert (lines[0] == warning) is warned
+    assert lines[1 if warned else 0].startswith("game 1:")
+
+
+def test_run_warns_of_a_short_bridge_run_in_yellow_before_the_live_view(
+    card_players, monkeypatch, capsys
+):
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    assert main(["run", "local-llm", "basal-mini", "--game", "bridge", "--games", "2"]) == 0
+    out = capsys.readouterr().out
+    yellow, reset = "\x1b[33m", "\x1b[0m"
+    warning = f"{yellow}Only 1 of the 8 boards recommended:{reset} a few boards say little"
+    assert warning in out
+    assert out.index(warning) < out.index("Starting...") < out.index("Statistics")
+
+
+@pytest.mark.parametrize("live", [False, True], ids=["plain", "live"])
+def test_run_rejects_an_odd_number_of_bridge_games(
+    card_players, models_file, monkeypatch, capsys, live
+):
+    if live:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+    assert main(["run", "local-llm", "basal-mini", "--game", "bridge", "--games", "3"]) == 2
+    out = capsys.readouterr().out
+    assert "bridge plays every start twice" in out and "Starting..." not in out
+    assert saved_runs(models_file) == []
+
+
+def test_run_lets_any_other_error_building_the_competition_surface(scripted, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ValueError("a bug, not a setup rule")
+
+    monkeypatch.setattr("ollmpiada.cli.Competition", broken)
+    scripted.update({"local-llm": [], "basal-mini": []})
+    with pytest.raises(ValueError, match="a bug, not a setup rule"):
+        main(["run", "local-llm", "basal-mini"])
 
 
 def test_show_rejects_a_missing_run(tmp_path, capsys):
@@ -256,7 +484,7 @@ def play_into(view, tmp_path, first, second, games=2):
         ScriptedPlayer("model-b", [WARM_UP, *second]),
     )
     competition = Competition(
-        ChessGame(),
+        CHESS,
         players,
         games=games,
         max_turns=20,
@@ -267,7 +495,7 @@ def play_into(view, tmp_path, first, second, games=2):
 
 
 def test_live_view_visual_mode_shows_board_moves_and_rejections(tmp_path):
-    view = LiveView(ChessGame(), visual=True)
+    view = LiveView(CHESS, visual=True)
     assert render(view).strip() == "Starting..."
     play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Nxf7", "Qh4#"], games=1)
     text = render(view)
@@ -283,7 +511,7 @@ def test_live_view_visual_mode_shows_board_moves_and_rejections(tmp_path):
 
 
 def test_live_view_shows_the_latest_moves_and_keeps_the_board_in_place(tmp_path):
-    view = LiveView(ChessGame(), visual=True)
+    view = LiveView(CHESS, visual=True)
     play_into(view, tmp_path, [RESIGN], [], games=1)
     view.handle(GameStarted(2, ("model-a", "model-b"), chess.Board()))
 
@@ -291,16 +519,32 @@ def test_live_view_shows_the_latest_moves_and_keeps_the_board_in_place(tmp_path)
         return next(i for i, line in enumerate(render(view).splitlines()) if line.startswith("8 "))
 
     empty_list_row = board_row()
+    board = chess.Board()
     for turn in range(120):
         side, move = (Side.FIRST, "Nf3") if turn % 2 == 0 else (Side.SECOND, "Nc6")
-        view.handle(MoveMade(2, side, "model", move, chess.Board(), draw_offered=False))
+        # Null moves advance the side to move and the move number, which the move marks follow.
+        board.push(chess.Move.null())
+        view.handle(MoveMade(2, side, "model", move, board.copy(), draw_offered=False))
     text = render(view)
     assert board_row() == empty_list_row
     assert "(60) Nf3 Nc6" in text and "(1) " not in text
 
 
+def test_live_view_marks_the_move_list_where_the_game_says(tmp_path):
+    view = LiveView(TurnBasedMaster(MovesOnly()), visual=True)
+    players = (
+        ScriptedPlayer("model-a", [WARM_UP, "a", "a", "b"]),
+        ScriptedPlayer("model-b", [WARM_UP, "b", "x", "a", "b"]),
+    )
+    competition = Competition(
+        view.master, players, games=1, max_turns=None, runs_dir=tmp_path, publish=view.handle
+    )
+    asyncio.run(competition.run())
+    assert "[0] a b a [3] [✗ East 1: 'x' is not a or b] a b b" in render(view)
+
+
 def test_live_view_background_mode_has_no_board(tmp_path):
-    view = LiveView(ChessGame(), visual=False)
+    view = LiveView(CHESS, visual=False)
     play_into(view, tmp_path, FIRST_SCRIPT, SECOND_SCRIPT)
     text = render(view)
     assert "♛" not in text and "(1) f3" not in text and "Requests" not in text
@@ -308,7 +552,7 @@ def test_live_view_background_mode_has_no_board(tmp_path):
 
 
 def test_live_view_status_shows_the_current_game_and_turn(tmp_path):
-    view = LiveView(ChessGame(), visual=False)
+    view = LiveView(CHESS, visual=False)
     statuses = []
     handle = view.handle
 
@@ -322,7 +566,7 @@ def test_live_view_status_shows_the_current_game_and_turn(tmp_path):
 
 
 def test_statistics_never_show_unknown_tokens_as_zero(tmp_path):
-    view = LiveView(ChessGame(), visual=False)
+    view = LiveView(CHESS, visual=False)
     no_usage = TurnResponse('{"action":"resign"}', RESIGN, 2.0, None)
     state = play_into(view, tmp_path, [no_usage], [], games=1)
     a_row = next(line for line in render(stats_table(state)).splitlines() if "model-a" in line)
@@ -330,7 +574,7 @@ def test_statistics_never_show_unknown_tokens_as_zero(tmp_path):
 
 
 def test_unreported_reasoning_is_shown_as_unknown(tmp_path):
-    view = LiveView(ChessGame(), visual=False)
+    view = LiveView(CHESS, visual=False)
     answer = TurnResponse('{"action":"resign"}', RESIGN, 2.0, None)
     state = play_into(view, tmp_path, [answer], [], games=1)
     stats = state.stats["model-a"]
@@ -369,10 +613,8 @@ def thinker(lines: list[str]) -> str | None:
 def started_game(tmp_path, clock):
     """A visual live view whose game 1 has just started, driven by events, not a competition."""
     players = (ScriptedPlayer("model-a", []), ScriptedPlayer("model-b", []))
-    state = Competition(
-        ChessGame(), players, games=1, max_turns=20, runs_dir=tmp_path / "runs"
-    ).state
-    view = LiveView(ChessGame(), visual=True, clock=clock)
+    state = Competition(CHESS, players, games=1, max_turns=20, runs_dir=tmp_path / "runs").state
+    view = LiveView(CHESS, visual=True, clock=clock)
     view.handle(CompetitionProgress(state))
     view.handle(GameStarted(1, ("model-a", "model-b"), chess.Board()))
     return view, state
@@ -458,7 +700,7 @@ def test_game_stats_never_show_unreported_reasoning_as_zero(tmp_path):
 
 def test_game_stats_freeze_when_the_game_ends(tmp_path):
     clock = FakeClock()
-    view = LiveView(ChessGame(), visual=True, clock=clock)
+    view = LiveView(CHESS, visual=True, clock=clock)
     play_into(view, tmp_path, ["f3", "Ke3", "g4"], ["e5", "Qh4#"], games=1)
     clock.advance(30)
     lines = render(view).splitlines()
@@ -469,7 +711,7 @@ def test_game_stats_freeze_when_the_game_ends(tmp_path):
 
 
 def test_game_stats_follow_the_side_swap_in_the_next_game(tmp_path):
-    view = LiveView(ChessGame(), visual=True, clock=FakeClock())
+    view = LiveView(CHESS, visual=True, clock=FakeClock())
     play_into(view, tmp_path, FIRST_SCRIPT, SECOND_SCRIPT)
     lines = render(view).splitlines()
     assert any("1 move completed" in line for line in lines)

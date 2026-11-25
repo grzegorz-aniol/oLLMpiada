@@ -7,7 +7,7 @@ import anthropic
 import httpx2
 import openai
 import pydantic_ai
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, NativeOutput, PromptedOutput, capture_run_messages
 from pydantic_ai.exceptions import ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -21,31 +21,33 @@ from pydantic_ai.settings import ModelSettings
 
 from ollmpiada.config import Effort, Model, OutputMode
 from ollmpiada.games.base import Prompt
-from ollmpiada.players.base import TransportError, TurnAnswer, TurnRequest, TurnResponse, Usage
+from ollmpiada.players.base import (
+    ANSWER_TITLE,
+    MOVE_DESCRIPTION,
+    TransportError,
+    TurnAnswer,
+    TurnRequest,
+    TurnResponse,
+    Usage,
+)
 
 # The first-run banner would print into the terminal UI.
 pydantic_ai.BANNER_ENABLED = False
 
-# Follows the game's system part, which ends with a newline.
-ANSWER_FORMAT = """
-ANSWER FORMAT
 
-Answer with three fields: action (move, resign or accept_draw); move (your move
-exactly as listed under LEGAL MOVES, required when action is move); offer_draw
-(true to offer a draw together with your move, otherwise false).
-"""
-
-MOVE_ONLY_ANSWER_FORMAT = """
-ANSWER FORMAT
-
-Answer with one field: move (your move exactly as listed under LEGAL MOVES).
-"""
-
-
+# The answer schema of a move-only turn (`TurnRequest.move_only`); like `TurnAnswer` it is
+# model-facing text.
 class MoveAnswer(BaseModel):
-    """The answer of a turn in which only a move is allowed (`TurnRequest.move_only`)."""
+    """Your answer for this turn: the entry you play from the legal list in the message."""
 
-    move: str
+    model_config = ConfigDict(title=ANSWER_TITLE)
+
+    move: str = Field(description=MOVE_DESCRIPTION)
+
+
+def answer_type(move_only: bool) -> type[BaseModel]:
+    """The answer model an LLM fills in: the move alone in a move-only turn."""
+    return MoveAnswer if move_only else TurnAnswer
 
 
 # How PydanticAI asks for the answer: an output tool, the server's JSON schema mode, or the
@@ -57,16 +59,17 @@ _OUTPUT_WRAPPERS = {
 }
 
 
-def llm_message(prompt: Prompt, *, move_only: bool = False) -> str:
-    """The one user message an LLM player sends: rules, answer format, then the turn.
+def llm_message(prompt: Prompt) -> str:
+    """The one user message an LLM player sends: rules, the game's answer format, then the turn,
+    each part ending with a newline and set apart by a blank line.
 
     No system message comes from ollmpiada, since some chat templates refuse a second one and
     PydanticAI adds its own for prompted output. The text that is the same from turn to turn
-    goes first, so a server can reuse its cached prefix; the answer format and output schema
-    change once, after the opening, which restarts that prefix once per game.
+    goes first, so a server can reuse its cached prefix. In chess the answer format and output
+    schema change once, after the opening, which restarts that prefix once per game; in bridge
+    they never change.
     """
-    answer_format = MOVE_ONLY_ANSWER_FORMAT if move_only else ANSWER_FORMAT
-    return f"{prompt.system}{answer_format}\n{prompt.user}"
+    return f"{prompt.system}\n{prompt.answer_format}\n{prompt.user}"
 
 
 class LLMPlayer:
@@ -87,11 +90,11 @@ class LLMPlayer:
         )
         self.name = name
         wrap = _OUTPUT_WRAPPERS[output_mode]
-        self._move_only_output = wrap(MoveAnswer)
+        self._outputs = {move_only: wrap(answer_type(move_only)) for move_only in (False, True)}
         # Output retries are off so every invalid answer reaches the game master to be counted.
         self._agent = Agent(
             model,
-            output_type=wrap(TurnAnswer),
+            output_type=self._outputs[False],
             retries={"output": 0},
             model_settings=settings,
         )
@@ -102,8 +105,8 @@ class LLMPlayer:
         with capture_run_messages() as messages:
             try:
                 run = await self._agent.run(
-                    llm_message(request.prompt, move_only=request.move_only),
-                    output_type=self._move_only_output if request.move_only else None,
+                    llm_message(request.prompt),
+                    output_type=self._outputs[request.move_only],
                 )
                 answer = run.output
                 if isinstance(answer, MoveAnswer):

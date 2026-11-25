@@ -10,13 +10,12 @@ from ollmpiada.game_master import (
     GameFinished,
     GameStarted,
     MoveMade,
-    play_game,
-    start_request,
+    TurnBasedMaster,
 )
 from ollmpiada.games.base import OPENING_MOVES, Outcome, Side
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players.base import PermanentError, TransportError, TurnAnswer
-from tests.fakes import USAGE, Judged, ScriptedPlayer, unreadable
+from tests.fakes import USAGE, Judged, MovesOnly, ScriptedPlayer, SeededStart, unreadable
 
 RESIGN = TurnAnswer(action="resign")
 ACCEPT = TurnAnswer(action="accept_draw")
@@ -29,7 +28,7 @@ class ChessFrom(ChessGame):
         super().__init__()
         self.fen = fen
 
-    def new_state(self) -> chess.Board:
+    def new_state(self, seed: int) -> chess.Board:
         return chess.Board(self.fen)
 
 
@@ -41,8 +40,7 @@ def run(white, black, *, game=None, max_turns=50, events=None):
     white = ScriptedPlayer("white-model", white)
     black = ScriptedPlayer("black-model", black)
     result = asyncio.run(
-        play_game(
-            game or ChessGame(),
+        TurnBasedMaster(game or ChessGame()).play(
             (white, black),
             max_turns=max_turns,
             number=3,
@@ -59,6 +57,20 @@ def test_turn_request_carries_the_legal_moves_and_their_groups():
     state = chess.Board()
     assert request.legal_moves == ChessGame().legal_moves(state)
     assert request.move_groups == ChessGame().move_groups(state)
+
+
+def test_a_game_starts_from_the_state_of_its_seed():
+    white = ScriptedPlayer("white-model", [])
+    black = ScriptedPlayer("black-model", [RESIGN])
+    master = TurnBasedMaster(SeededStart())
+    result = asyncio.run(master.play((white, black), max_turns=50, seed=3, backoff_s=(0,)))
+    assert result.outcome == Outcome(Side.FIRST, "resignation")
+    assert (len(white.requests), len(black.requests)) == (0, 1)
+
+
+def test_start_requests_use_the_start_of_seed_0():
+    request = TurnBasedMaster(SeededStart()).start_request(max_turns=50)
+    assert "as White" in request.prompt.system
 
 
 # --- end of game: one test per row of docs/game-master/results.md#end-of-game ---
@@ -323,10 +335,10 @@ def test_resignation_or_draw_offer_in_the_opening_is_rejected(early):
 @pytest.mark.opening
 def test_start_request_is_move_only_by_default_and_full_after_the_opening():
     """The warm-up primes the opening turns; the probe also checks a turn after them."""
-    request = start_request(ChessGame(), max_turns=40)
+    request = TurnBasedMaster(ChessGame()).start_request(max_turns=40)
     assert request.move_only and not request.draw_offered
     assert "Choose exactly one move" in request.prompt.user
-    later = start_request(ChessGame(), max_turns=40, turn=OPENING_MOVES + 1)
+    later = TurnBasedMaster(ChessGame()).start_request(max_turns=40, turn=OPENING_MOVES + 1)
     assert not later.move_only and len(later.legal_moves) == 20
     assert "Unless you resign or accept a draw" in later.prompt.user
 
@@ -361,3 +373,56 @@ def test_forced_move_after_the_opening_is_still_asked(monkeypatch):
     forced = black.requests[1]
     assert len(forced.legal_moves) == 1 and not forced.move_only
     assert result.outcome == Outcome(Side.FIRST, "resignation")
+
+
+# --- game hooks: a game of moves alone (tests.fakes.MovesOnly) ---
+
+
+def test_a_move_only_game_never_offers_resigning_or_a_draw():
+    game = MovesOnly()
+    result, first, second = run(["a", RESIGN, offer("a"), "a", "b"], ["b", "a", "b"], game=game)
+    assert all(r.move_only for r in first.requests + second.requests)
+    rejections = [a.rejection for a in result.turns[2].attempts[:2]]
+    # In the game's own words, so nothing about moves reaches a game that has none.
+    assert rejections == ["move_only: play a letter"] * 2
+    assert [t.move for t in result.turns] == ["a", "b", "a", "a", "b", "b"]
+    assert result.outcome == Outcome(Side.SECOND, "count")
+
+
+class Noted(MovesOnly):
+    user_template = "$position; $note"
+
+    def prompt_values(self, ctx):
+        return {"note": f"move-only turn {ctx.turn}" if ctx.move_only else "full turn"}
+
+
+def test_a_game_adds_its_own_prompt_values_to_the_shared_ones():
+    game = Noted()
+    ctx = game.context(game.new_state(0), turn=3, max_turns=None)
+    prompt = game.prompt(ctx)
+    assert prompt.user == "Played: nothing; move-only turn 3\n"
+    assert (prompt.answer_format, prompt.questions) == ("Answer with a letter.\n", game.questions)
+
+
+@pytest.mark.parametrize("placeholder", ["choose_move", "previous_attempt"])
+def test_no_wording_is_shared_between_games(placeholder):
+    """Neither chess wording nor the retry sentence comes from the shared code: a game's
+    template can use only the values every game has and its own `prompt_values`."""
+    game = Noted()
+    game.user_template = f"${placeholder}"
+    with pytest.raises(KeyError, match=placeholder):
+        game.prompt(game.context(game.new_state(0), turn=1, max_turns=None))
+
+
+@pytest.mark.parametrize("max_turns", [None, 1])
+def test_a_game_without_a_turn_limit_is_never_adjudicated(max_turns):
+    result, _, _ = run(["a", "a", "a"], ["a", "b", "b"], game=MovesOnly(), max_turns=max_turns)
+    assert result.outcome == Outcome(Side.FIRST, "count") and result.error is None
+    assert len(result.turns) == MovesOnly.LENGTH
+
+
+def test_third_rejected_answer_forfeits_through_the_game():
+    game = MovesOnly()
+    result, _, _ = run(["a", "x", "y", "z"], ["b"], game=game)
+    assert game.forfeits == [(("a", "b"), Side.FIRST, "illegal answers")]
+    assert result.outcome == Outcome(Side.SECOND, "illegal answers")
