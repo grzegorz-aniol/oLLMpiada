@@ -1,7 +1,7 @@
 """Check the docs/ knowledge base: reachability, links, anchors, related frontmatter.
 
-Links and images in the repository README.md are checked too; it is the entry point
-outside docs/, so it counts for neither reachability nor size.
+Links and images in the repository README.md are checked too, and so are anchors into it;
+it is the entry point outside docs/, so it counts for neither reachability nor size.
 
 Policy lives in docs/README.md ("Maintaining this knowledge base"). Exits 1 on errors;
 size warnings never fail. Standard library only: `uv run python scripts/check_docs.py`.
@@ -106,7 +106,8 @@ def check_file(
 def reachable_from(root: Path, edges: dict[Path, set[Path]]) -> set[Path]:
     seen, queue = {root}, [root]
     while queue:
-        for dest in edges[queue.pop()] - seen:
+        # The repository README is a link target without edges of its own.
+        for dest in edges.get(queue.pop(), set()) - seen:
             seen.add(dest)
             queue.append(dest)
     return seen
@@ -118,7 +119,9 @@ def main() -> int:
         return 1
     docs = sorted(DOCS.rglob("*.md"))
     parsed = {path: split_frontmatter(path.read_text(encoding="utf-8")) for path in docs}
+    readme = REPO_README.read_text(encoding="utf-8")
     anchors = {path: slugs(body) for path, (_, body) in parsed.items()}
+    anchors[REPO_README] = slugs(readme)
     catalogs = {
         path.parent
         for path, (meta, _) in parsed.items()
@@ -130,7 +133,7 @@ def main() -> int:
         edges[path], file_errors, file_warnings = check_file(path, meta, body, anchors)
         errors += file_errors
         warnings += file_warnings
-    errors += check_links(REPO_README, REPO_README.read_text(encoding="utf-8"), anchors)[1]
+    errors += check_links(REPO_README, readme, anchors)[1]
 
     reachable = reachable_from(ROOT_INDEX, edges)
     for path in docs:

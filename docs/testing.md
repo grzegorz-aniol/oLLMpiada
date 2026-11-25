@@ -20,8 +20,11 @@ uv run pytest tests/test_x.py -k name   # one test
 - **Unit** - `tests/`, no network or external services; fast enough to run on
   every change.
 - **Documentation** - `tests/test_docs.py` runs `scripts/check_docs.py`, so broken
-  links and images (in `docs/` and the repository `README.md`) and orphaned
-  documents fail the suite.
+  links, anchors and images (in `docs/` and the repository `README.md`) and
+  orphaned documents fail the suite. It also checks that the numbers the README's
+  [supported games](../README.md#supported-games) quotes (opening moves, turn
+  limit, adjudication threshold, attempts per turn, trump fit, recommended boards)
+  match their code constants.
 
 - **Rule: no real models in tests.** Game master, competition and UI tests use
   scripted fake players that return prepared answers (legal moves, illegal moves,

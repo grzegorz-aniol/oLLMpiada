@@ -41,8 +41,14 @@ experiment, not a production app.
 
 ## Supported games
 
-Each game is summarized under the same headings. The linked documents own the
+Each game is summarized under the same fields. The linked documents own the
 rules; this section only says what is played and what is left out.
+
+In both games a player is always a configured model, never an engine or a human
+([non-goals](docs/product.md#non-goals)). A model call that still fails after the
+transport retries, such as a request timeout or a provider error, aborts the
+game: it is saved with no result and the competition stops
+([validation and retries](docs/game-master/turns.md#validation-and-retries)).
 
 ### Chess
 
@@ -63,9 +69,10 @@ rules; this section only says what is played and what is left out.
   at the turn limit are counted apart from games decided on the board.
 - **Hidden information:** none; both models see the whole board.
 - **Not supported:** variants and other starting positions; a chess clock
-  (thinking time is recorded, never limited by the rules); adjudication before
-  the turn limit; engines or humans as players
-  ([non-goals](docs/product.md#non-goals)).
+  (thinking time is recorded, not limited, except by the request timeout,
+  `OLLMPIADA_REQUEST_TIMEOUT_S` or a provider's
+  [`timeout_s`](docs/configuration.md#provider-fields): a call that keeps timing
+  out aborts the game, it does not lose it); adjudication before the turn limit.
 - **Record:** one PGN file per game, with the reason in its `Termination` tag
   and, for an adjudicated game, the Stockfish score as a closing comment.
 - **Rules:** [end of game](docs/game-master/results.md#end-of-game),

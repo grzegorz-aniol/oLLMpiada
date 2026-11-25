@@ -60,9 +60,9 @@ The rules of refereeing, prompting and scoring are owned by
 
 - Production quality: no authentication, no multi-user support, no database.
 - Polished UX: the UI is simple and clean, nothing more.
-- Chess engines or humans as players. A player is always a configured model.
-  Stockfish only referees: it judges the final position of a game that reaches
-  the turn limit (see [end of game](game-master/results.md#end-of-game)).
+- Engines or humans as players, in any game. A player is always a configured
+  model. Stockfish only referees chess: it judges the final position of a game
+  that reaches the turn limit (see [end of game](game-master/results.md#end-of-game)).
 
 ## Stack
 
