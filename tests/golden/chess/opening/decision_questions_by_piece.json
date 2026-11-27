@@ -1,0 +1,98 @@
+{
+  "piece": {
+    "type": "choice",
+    "instructions": "Which piece do you move? Each option lists its moves.",
+    "criteria": {
+      "knight_g1": "Nh3, Nf3",
+      "knight_b1": "Nc3, Na3",
+      "pawn_h2": "h3, h4",
+      "pawn_g2": "g3, g4",
+      "pawn_f2": "f3, f4",
+      "pawn_e2": "e3, e4",
+      "pawn_d2": "d3, d4",
+      "pawn_c2": "c3, c4",
+      "pawn_b2": "b3, b4",
+      "pawn_a2": "a3, a4"
+    }
+  },
+  "move_knight_g1": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "g1h3": "Nh3",
+      "g1f3": "Nf3"
+    }
+  },
+  "move_knight_b1": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "b1c3": "Nc3",
+      "b1a3": "Na3"
+    }
+  },
+  "move_pawn_h2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "h2h3": "h3",
+      "h2h4": "h4"
+    }
+  },
+  "move_pawn_g2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "g2g3": "g3",
+      "g2g4": "g4"
+    }
+  },
+  "move_pawn_f2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "f2f3": "f3",
+      "f2f4": "f4"
+    }
+  },
+  "move_pawn_e2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "e2e3": "e3",
+      "e2e4": "e4"
+    }
+  },
+  "move_pawn_d2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "d2d3": "d3",
+      "d2d4": "d4"
+    }
+  },
+  "move_pawn_c2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "c2c3": "c3",
+      "c2c4": "c4"
+    }
+  },
+  "move_pawn_b2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "b2b3": "b3",
+      "b2b4": "b4"
+    }
+  },
+  "move_pawn_a2": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "a2a3": "a3",
+      "a2a4": "a4"
+    }
+  }
+}

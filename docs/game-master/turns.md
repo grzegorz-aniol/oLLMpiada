@@ -18,7 +18,7 @@ a turn, and how it validates answers and retries.
 | --- | --- |
 | `game` | The `Game` it referees; the runner reads its name, side names, records and prompt version from it, and the live view renders its board |
 | `play(players, *, number, seed, max_turns, publish, backoff_s)` | Plays one game with `players` in side order, publishes its [events](#turn-loop) and returns the `GameResult`; the game starts from `game.new_state(seed)`, and `max_turns` is `None` for a game without a turn limit |
-| `start_request(*, max_turns, turn)` | A turn request in the start of `SAMPLE_SEED`, for calls outside a game: the warm-up and `ollmpiada probe` |
+| `start_request(*, max_turns, turn, draw_offered, rejection)` | A turn request in the start of `SAMPLE_SEED`, for calls outside a game: the warm-up, `ollmpiada probe` and the sample turns of the [prompt version](prompts.md#prompts) |
 | `warm_up(player, *, max_turns, backoff_s)` | Sends the player one opening turn and discards the answer (see [competition runner](../architecture.md#competition-runner)) |
 
 `TurnBasedMaster(game)` implements it for every game behind the [game abstraction](README.md#game-abstraction):

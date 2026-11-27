@@ -11,9 +11,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from ollmpiada.game_master import TRANSPORT_BACKOFF_S, Event, GameMaster, GameResult
-from ollmpiada.games.base import SAMPLE_SEED, Game, Side, first_full_move
-from ollmpiada.players.base import Player, TransportError, Usage
+from ollmpiada.game_master import (
+    TRANSPORT_BACKOFF_S,
+    Event,
+    GameMaster,
+    GameResult,
+    TurnBasedMaster,
+)
+from ollmpiada.games.base import Game, Side, first_full_move
+from ollmpiada.players.base import Player, TransportError, TurnRequest, Usage
 from ollmpiada.players.llm import answer_type, llm_message
 
 Status = Literal["warming up", "running", "finished", "aborted", "stopped"]
@@ -182,21 +188,31 @@ def game_seed(seed: int, number: int) -> int:
     return seed + start_number(number) - 1
 
 
-def prompt_version(game: Game) -> str:
-    """Hash of what an LLM reads in sample turns, an opening turn and a later one: the message
-    and the output schema of each, so it covers both templates, every wording branch in code,
-    both LLM answer formats, the schema descriptions and the message layout."""
-    state = game.new_state(SAMPLE_SEED)
+def sample_requests(game: Game) -> dict[str, TurnRequest]:
+    """The sample turns, by name, that `prompt_version` hashes and the golden test pins: the
+    opening turn and a turn after the opening with a pending draw offer and a rejected attempt,
+    so the wording of both answer formats, the draw offer and the retry is rendered."""
+    master = TurnBasedMaster(game)
     later = first_full_move()
     max_turns = later if game.turn_limit else None
-    opening = game.context(state, turn=1, max_turns=max_turns)
-    retry = game.context(state, turn=later, max_turns=max_turns, draw_offered=True, rejection="-")
+    return {
+        "opening": master.start_request(max_turns=max_turns),
+        "later": master.start_request(
+            max_turns=max_turns, turn=later, draw_offered=True, rejection="-"
+        ),
+    }
+
+
+def prompt_version(game: Game) -> str:
+    """Hash of what an LLM reads in the sample turns: the message and the output schema of each,
+    so it covers both templates, every wording branch in code, both LLM answer formats, the
+    schema descriptions and the message layout."""
     # The answer format sits at the system/user boundary, so moving text between the parts
     # changes the hash.
     text = repr(
         tuple(
-            (llm_message(game.prompt(c)), json.dumps(answer_type(c.move_only).model_json_schema()))
-            for c in (opening, retry)
+            (llm_message(r.prompt), json.dumps(answer_type(r.move_only).model_json_schema()))
+            for r in sample_requests(game).values()
         )
     )
     return hashlib.sha256(text.encode()).hexdigest()[:12]

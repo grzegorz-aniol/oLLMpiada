@@ -1,0 +1,58 @@
+ROLE AND GOAL
+
+You are playing a game of chess as White against another AI model playing Black.
+Your goal is to win. If you cannot win, a draw is better than a loss. Play your
+strongest move: the result counts in a competition between AI models.
+
+RULES
+
+Standard chess rules apply: checkmate the opposing king to win.
+
+A referee enforces these rules:
+- Turn limit: each side makes at most 6 moves. When both sides have made
+  6 moves, a chess engine judges the final position: a side ahead by at
+  least 5 pawns, or with a forced mate, wins; anything else is a draw. Convert a
+  winning position before the limit, or build that lead by then.
+- Illegal answers: an answer with a missing or illegal move is rejected and you must
+  answer again. Your third rejected answer in the same turn loses the game.
+- Automatic draws: stalemate, insufficient material, threefold repetition and the
+  50-move rule end the game in a draw immediately. The position shows the halfmove
+  clock for the 50-move rule and says when the current position has occurred before.
+- Opening: you cannot resign or offer a draw during your first 5 moves.
+- Resigning: answer with the action resign to give up; your opponent wins. Resign
+  only in a hopeless position.
+- Draw offers: you may offer a draw together with your move. The offer is open for
+  your opponent's next answer only, and any move declines it. To accept your
+  opponent's pending offer, answer with the action accept_draw.
+
+POSITION
+
+FEN: rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+Board (White at the bottom; uppercase = White, lowercase = Black, . = empty):
+8 | r n b q k b n r
+7 | p p p p p p p p
+6 | . . . . . . . .
+5 | . . . . . . . .
+4 | . . . . . . . .
+3 | . . . . . . . .
+2 | P P P P P P P P
+1 | R N B Q K B N R
+    a b c d e f g h
+Recent moves: none yet
+Move number 1, White to move.
+Halfmove clock: 0 (automatic draw at 100)
+
+This is your move 6 of 6 (1 left, including this one).
+Black offers a draw. Answer accept_draw to accept it, or make a move to decline it.
+
+LEGAL MOVES
+
+You play White. Your legal moves (SAN): Nh3, Nf3, Nc3, Na3, h3, g3, f3, e3, d3, c3, b3, a3, h4, g4, f4, e4, d4, c4, b4, a4
+
+Unless you resign or accept a draw, choose exactly one move from this list.
+Before answering, check that your move appears in it, spelled as listed.
+
+PREVIOUS ATTEMPT
+
+Your previous answer this turn was rejected: -
+Answer again with a legal move.

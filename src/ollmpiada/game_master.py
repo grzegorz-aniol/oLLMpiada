@@ -134,9 +134,17 @@ class GameMaster(Protocol):
         """Play one game from the start `seed` gives; `players` are in side order. `max_turns`
         is None for a game without a turn limit."""
 
-    def start_request(self, *, max_turns: int | None, turn: int = 1) -> TurnRequest:
-        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up and
-        `ollmpiada probe`); `turn` decides which answer format it asks for."""
+    def start_request(
+        self,
+        *,
+        max_turns: int | None,
+        turn: int = 1,
+        draw_offered: bool = False,
+        rejection: str | None = None,
+    ) -> TurnRequest:
+        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up,
+        `ollmpiada probe` and the sample turns of `prompt_version`); `turn` decides which answer
+        format it asks for."""
 
     async def warm_up(
         self, player: Player, *, max_turns: int | None, backoff_s: tuple[float, ...]
@@ -263,12 +271,22 @@ class TurnBasedMaster[S]:
         publish(GameFinished(result))
         return result
 
-    def start_request(self, *, max_turns: int | None, turn: int = 1) -> TurnRequest:
-        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up and
-        `ollmpiada probe`); `turn` decides whether it is move-only (`Game.move_only`) and so
-        which answer format it asks for."""
+    def start_request(
+        self,
+        *,
+        max_turns: int | None,
+        turn: int = 1,
+        draw_offered: bool = False,
+        rejection: str | None = None,
+    ) -> TurnRequest:
+        """A turn in the start of `SAMPLE_SEED`, for calls made outside a game (the warm-up,
+        `ollmpiada probe` and the sample turns of `prompt_version`); `turn` decides whether it
+        is move-only (`Game.move_only`) and so which answer format it asks for."""
         state = self.game.new_state(SAMPLE_SEED)
-        return self._request(state, self.game.context(state, turn=turn, max_turns=max_turns))
+        ctx = self.game.context(
+            state, turn=turn, max_turns=max_turns, draw_offered=draw_offered, rejection=rejection
+        )
+        return self._request(state, ctx)
 
     def _request(self, state: S, ctx: PromptContext) -> TurnRequest:
         return TurnRequest(

@@ -1,0 +1,45 @@
+{
+  "action": {
+    "type": "choice",
+    "instructions": "What do you do this turn?",
+    "criteria": {
+      "move": "Make a move",
+      "resign": "Resign the game",
+      "accept_draw": "Accept the opponent's draw offer"
+    }
+  },
+  "offer_draw": {
+    "type": "choice",
+    "instructions": "Do you offer a draw together with your move?",
+    "criteria": {
+      "yes": "Offer a draw",
+      "no": "Do not offer a draw"
+    }
+  },
+  "move": {
+    "type": "choice",
+    "instructions": "Which move do you play?",
+    "criteria": {
+      "g1h3": "Nh3",
+      "g1f3": "Nf3",
+      "b1c3": "Nc3",
+      "b1a3": "Na3",
+      "h2h3": "h3",
+      "g2g3": "g3",
+      "f2f3": "f3",
+      "e2e3": "e3",
+      "d2d3": "d3",
+      "c2c3": "c3",
+      "b2b3": "b3",
+      "a2a3": "a3",
+      "h2h4": "h4",
+      "g2g4": "g4",
+      "f2f4": "f4",
+      "e2e4": "e4",
+      "d2d4": "d4",
+      "c2c4": "c4",
+      "b2b4": "b4",
+      "a2a4": "a4"
+    }
+  }
+}

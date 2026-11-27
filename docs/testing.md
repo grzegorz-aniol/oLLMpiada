@@ -69,6 +69,37 @@ uv run pytest tests/test_x.py -k name   # one test
 <!-- Add a manual smoke-test layer (a real local model) when it exists: what it
 needs running and how to start it. -->
 
+## Golden prompts
+
+`tests/test_golden.py` pins what a model reads in the sample turns, so a refactor
+cannot change a prompt unnoticed. For each game in the registry and each of its
+sample turns (`sample_requests` in `competition.py`: `opening`, the opening turn,
+and `later`, a turn after the opening with a pending draw offer and a rejected
+attempt), `tests/golden/<game>/<turn>/` holds:
+
+- `llm_message.txt` - the LLM user message (`llm_message`);
+- `answer_schema.json` - the JSON schema of the LLM answer model (`answer_type`);
+- `decision_state.txt`, `decision_questions.json` - the `state` and `questions`
+  the decision player posts, captured from `DecisionPlayer` over a mock transport;
+- `decision_questions_by_piece.json` - the same questions asked per piece, with
+  `max_options` one below the number of legal moves.
+
+`tests/golden/<game>/prompt_version.txt` holds the game's
+[prompt version](game-master/prompts.md#prompts), so a new hash shows in the same
+diff. The test runs with the real [opening](game-master/turns.md#opening) and
+fails on any difference, a missing file or a file no longer rendered; its message
+lists the files and their diff. The game master's rejection reasons
+(`Game.rejection`) appear in no sample turn and are not pinned.
+
+- **Rule:** regenerate the golden files only for a deliberate change to
+  model-facing text, then review their diff with the change:
+
+  ```bash
+  UPDATE_GOLDEN=1 uv run pytest tests/test_golden.py
+  ```
+
+  It rewrites each game's folder from scratch, so a removed file disappears too.
+
 ## Writing tests
 
 - **Rule:** test behavior through the public interface, not private helpers.

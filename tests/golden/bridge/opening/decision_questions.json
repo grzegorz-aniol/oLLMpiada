@@ -1,0 +1,21 @@
+{
+  "move": {
+    "type": "choice",
+    "instructions": "Which card do you play?",
+    "criteria": {
+      "SA": "♠A",
+      "SK": "♠K",
+      "ST": "♠10",
+      "S9": "♠9",
+      "S7": "♠7",
+      "S2": "♠2",
+      "DQ": "♦Q",
+      "D7": "♦7",
+      "D4": "♦4",
+      "D2": "♦2",
+      "CQ": "♣Q",
+      "C8": "♣8",
+      "C4": "♣4"
+    }
+  }
+}

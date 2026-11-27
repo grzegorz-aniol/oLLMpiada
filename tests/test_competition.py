@@ -328,12 +328,6 @@ def test_progress_events_carry_the_state(tmp_path):
     assert sum(isinstance(e, MoveMade) for e in events) == 5
 
 
-@pytest.mark.opening
-def test_prompt_version_of_chess_is_pinned():
-    # A refactor that changes what the chess models read must show up here.
-    assert prompt_version(ChessGame()) == "6a8b3b041589"
-
-
 @pytest.mark.parametrize(
     ("template", "old", "new"),
     [("system_template", "win", "triumph"), ("user_template", "Before answering", "First")],

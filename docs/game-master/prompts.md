@@ -125,12 +125,17 @@ given`, bridge `the answer names no card; play a card`.
   format, the layout of the LLM message and the answer schema with its
   descriptions, so runs with different prompts are not compared by accident. It
   does not cover the decision questions or the wording of rejections.
-  `prompt_version` in `competition.py` hashes, for two sample prompts, an opening
-  turn and a later one in the start of `SAMPLE_SEED` (for bridge the opening
-  lead), the LLM message (`llm_message`) and the JSON schema of the answer model
-  that turn asks for (`answer_type`), so it covers both answer formats and both
-  schemas; the answer format sits at the system/user boundary, so moving text
+  `prompt_version` in `competition.py` hashes, for the two sample turns of
+  `sample_requests`, an opening turn and a later one in the start of `SAMPLE_SEED`
+  (for bridge the opening lead), the LLM message (`llm_message`) and the JSON
+  schema of the answer model that turn asks for (`answer_type`), so it covers both
+  answer formats and both schemas; the answer format sits at the system/user boundary, so moving text
   between the parts changes the version too.
+- **Rule:** a change to model-facing text, the decision questions included, is a
+  deliberate decision, never a side effect of a refactor: the
+  [golden test](../testing.md#golden-prompts) pins the sample turns as each player
+  sends them and fails on any change. Regenerate its files in the same change and
+  name the new prompt version in the change's description.
 
 ## Answer formats
 

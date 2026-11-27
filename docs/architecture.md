@@ -241,7 +241,7 @@ same tables.
   user's own setup (format in [configuration](configuration.md#model-config)).
 - `.env.example` - the environment variables to copy into `.env`.
 - `tests/` - test modules by area (`test_chess.py`, `test_bridge.py`,
-  `test_game_master.py`, ...), `fakes.py` (scripted fake players) and `test_docs.py` (runs the docs check); see [testing](testing.md).
+  `test_game_master.py`, ...), `fakes.py` (scripted fake players), `test_docs.py` (runs the docs check) and `test_golden.py` with `golden/` (the pinned model-facing requests); see [testing](testing.md).
 - `scripts/check_docs.py` - the docs link and reachability check.
 - `.local/runs/` - competition results, gitignored with the rest of `.local/`.
 - `docs/images/` - images for the README and docs, as WebP sized for the page.
