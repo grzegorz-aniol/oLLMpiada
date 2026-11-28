@@ -171,7 +171,10 @@ with action `move`; `answer_type` in `players/llm.py` picks the model.
   descriptions say what each field holds, when it is set or null, the exact
   allowed values (`move`, `resign`, `accept_draw`), that `move` is one entry
   copied unchanged from the legal list, that `offer_draw` is true only together
-  with a move, and that nothing else (explanation, Markdown, quotes) goes in.
+  with a move, and that nothing else (explanation, Markdown) goes in.
+- **Sensitive:** the `move` description must not forbid quotes. In `prompted`
+  mode Bielik 11B v3.1 read "no quotes" literally and answered a bare move
+  (`Nh6`) instead of `{"move": "Nh6"}` in every one-field answer.
 - **Sensitive:** every instruction belongs in a field description. Anthropic's
   native output (`output_config.format`) sends only the JSON schema and drops the
   class description, so that line is a one-line summary the model can miss.

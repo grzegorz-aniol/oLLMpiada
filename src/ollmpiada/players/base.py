@@ -13,11 +13,12 @@ Action = Literal["move", "resign", "accept_draw"]
 # address the model and name no code; every instruction sits in a field description, since
 # Anthropic's native output drops the class one (docs/game-master/prompts.md#answer-formats).
 ANSWER_TITLE = "answer"
+# Must not forbid quotes, or a model drops the JSON (docs/game-master/prompts.md#answer-formats).
 MOVE_DESCRIPTION = (
     "Exactly one entry from the legal list in the message (the list of everything you may "
     "play this turn), copied unchanged, character for character: no other notation, no "
-    "numbering, no added or removed symbols or spaces, no quotes, no explanation, no Markdown "
-    "and no other text."
+    "numbering, no added or removed symbols or spaces, no explanation, no Markdown and no "
+    "other text."
 )
 
 

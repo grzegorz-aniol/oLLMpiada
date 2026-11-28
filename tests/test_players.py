@@ -230,6 +230,8 @@ def test_llm_answer_schema_tells_the_model_what_each_field_holds(output_mode, re
     model_text = " ".join(texts).lower()
     assert not [w for w in GAME_WORDS if re.search(rf"\b{w}s?\b", model_text)]
     assert not [name for name in CODE_NAMES if name in json.dumps(schema) + description]
+    # A model took "no quotes" for "no JSON" (docs/game-master/prompts.md#answer-formats).
+    assert "quote" not in model_text
     move = properties["move"]["description"]
     for point in ("Exactly one entry from the legal list in the message", "copied unchanged"):
         assert point in move

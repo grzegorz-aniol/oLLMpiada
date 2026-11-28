@@ -21,7 +21,7 @@
         }
       ],
       "default": null,
-      "description": "Required when action is \"move\", otherwise null. Exactly one entry from the legal list in the message (the list of everything you may play this turn), copied unchanged, character for character: no other notation, no numbering, no added or removed symbols or spaces, no quotes, no explanation, no Markdown and no other text.",
+      "description": "Required when action is \"move\", otherwise null. Exactly one entry from the legal list in the message (the list of everything you may play this turn), copied unchanged, character for character: no other notation, no numbering, no added or removed symbols or spaces, no explanation, no Markdown and no other text.",
       "title": "Move"
     },
     "offer_draw": {
