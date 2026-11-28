@@ -42,7 +42,7 @@ once and played by one command, which can be run again until everything is playe
   "game": "chess",
   "games": 30,
   "max_turns": 50,
-  "models": {"B32": "Bielik-11B-v3.2-Instruct-GGUF:Q8_0-ctx4k@none", "HAIKU": "haiku-5-5@none"},
+  "models": {"B32": "Bielik-11B-v3.2-Instruct-GGUF:Q8_0-mem@none", "HAIKU": "haiku-5-5@none"},
   "competitions": [
     {"players": ["B32", "HAIKU"]},
     {"players": ["HAIKU", "B32"], "runs": 2}
