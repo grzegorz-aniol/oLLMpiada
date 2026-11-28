@@ -27,7 +27,8 @@ A referee enforces these rules:
 
 ANSWER FORMAT
 
-Answer with one field: move (your move exactly as listed under LEGAL MOVES).
+Answer with an object with one field: move (your move
+exactly as listed under LEGAL MOVES).
 
 POSITION
 

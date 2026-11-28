@@ -441,6 +441,11 @@ def test_the_llm_answer_format_points_to_a_section_of_the_message():
     assert named[1] in re.findall(r"^[A-Z][A-Z ]+$", llm_message(prompt), flags=re.MULTILINE)
 
 
+def test_the_llm_answer_format_asks_for_an_object_not_a_bare_card():
+    prompt = prompt_of(BridgeState(PLAY, Contract(2, "H")))
+    assert "an object with one field: move" in prompt.answer_format
+
+
 def test_no_text_a_bridge_model_reads_speaks_of_moves_or_actions():
     state = play(BridgeState(PLAY, Contract(2, "H")), "♠A")
     prompt = game.prompt(game.context(state, turn=1, max_turns=None, rejection="-"))

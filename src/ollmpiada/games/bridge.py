@@ -54,7 +54,8 @@ SYMBOL_LETTERS = str.maketrans({"♤": "S", "♡": "H", "♢": "D", "♧": "C", 
 SYMBOL_LETTERS |= str.maketrans({symbol: suit for suit, symbol in SYMBOLS.items()})
 ANSWER_FORMAT = """ANSWER FORMAT
 
-Answer with one field: move (the card you play, exactly as listed under LEGAL CARDS).
+Answer with an object with one field: move (the card you play, exactly as
+listed under LEGAL CARDS).
 """
 QUESTIONS = Questions(
     move="Which card do you play?",

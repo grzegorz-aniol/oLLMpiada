@@ -33,7 +33,8 @@ A referee enforces these rules:
 
 ANSWER FORMAT
 
-Answer with one field: move (the card you play, exactly as listed under LEGAL CARDS).
+Answer with an object with one field: move (the card you play, exactly as
+listed under LEGAL CARDS).
 
 POSITION
 

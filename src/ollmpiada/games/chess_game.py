@@ -63,7 +63,8 @@ exactly as listed under LEGAL MOVES, required when action is move); offer_draw
 """
 MOVE_ONLY_ANSWER_FORMAT = """ANSWER FORMAT
 
-Answer with one field: move (your move exactly as listed under LEGAL MOVES).
+Answer with an object with one field: move (your move
+exactly as listed under LEGAL MOVES).
 """
 QUESTIONS = Questions(
     move="Which move do you play?",

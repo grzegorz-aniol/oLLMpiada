@@ -189,6 +189,14 @@ names the three fields, and only `move` in a move-only turn; bridge names only
   format tells the model to answer exactly as listed under the heading of the
   legal moves in the same game's template (chess LEGAL MOVES, bridge LEGAL CARDS),
   so no other file depends on that heading.
+- **Sensitive:** the move-only sentence says "an object with one field: move",
+  not just "one field: move": the schema asks for a JSON object, and without the
+  word the sentence reads as "write the move". On 2026-11-28 Bielik 11B v3.1
+  (official template, ending with an empty think pair; Hugging Face tokenization)
+  answered chess opening turns with a bare move in 15 of 15 samples, and in 0 of
+  15 with the word; Bielik 3.0 and 3.2 were unaffected. "Object", not "JSON
+  object": the section goes to every output mode, tool calls included (see the
+  `output_mode` note below).
 
 The text that is the same from turn to turn comes first, so a local server can
 reuse its cached prompt prefix. In chess the answer format, and in every output

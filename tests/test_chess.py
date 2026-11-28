@@ -390,7 +390,8 @@ def test_answer_format_asks_for_the_move_alone_in_the_opening_and_names_the_lega
     state = game.new_state(0)
     opening = game.prompt(game.context(state, turn=1, max_turns=40))
     later = game.prompt(game.context(state, turn=OPENING_MOVES + 1, max_turns=40))
-    assert "one field: move" in opening.answer_format
+    # Without "an object" a model can read the sentence as "write the move" and answer it bare.
+    assert "an object with one field: move" in opening.answer_format
     assert not re.search("resign|draw", opening.answer_format)
     assert "three fields: action (move, resign or accept_draw)" in later.answer_format
     assert "offer_draw" in later.answer_format
