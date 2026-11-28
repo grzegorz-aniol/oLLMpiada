@@ -235,6 +235,7 @@ def test_a_server_that_exited_between_competitions_is_started_again(tmp_path, pi
         deadline = time.monotonic() + 5
         while not (gone(crashed) and reaped(child)) and time.monotonic() < deadline:
             time.sleep(0.05)
+        assert gone(crashed) and reaped(child), "the killed server's processes outlived 5 s"
         s.prepare([basal])
         assert served_models(fake.url) == ["Org/Model-GGUF"]
         assert int((pid_dir / "basal.pid").read_text()) != crashed

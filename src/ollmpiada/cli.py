@@ -429,7 +429,7 @@ def _dry_run(console: Console, models: dict[str, Model], experiment: Experiment)
     for number, row in pending:
         used = {m.provider.name for m in _models_of(row.planned.players, models)}
         steps = plan(providers, running, used)
-        running = [name for name in running if name in used] + list(steps.start)
+        running = [name for name in running if name not in steps.stop] + list(steps.start)
         console.print(
             f"[bold]Competition {number} of {len(rows)}:[/bold] {' vs '.join(row.planned.players)}",
             highlight=False,

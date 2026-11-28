@@ -180,10 +180,12 @@ previous one loaded and starts what this one needs. It does so from three option
   forgotten, and started again in step 3 when the competition uses it. On exit,
   also after Ctrl+C or an error, the runner stops every owned server it started or
   adopted and, if it prepared a competition, runs every `cleanup`. A `cleanup` that
-  fails or takes longer than `STOP_TIMEOUT_S`, or a server that does not start (its
-  command or output file cannot be opened) or get ready, fails the competition (a
-  server that did not get ready is stopped first), and the runner moves on to the
-  next one.
+  fails or takes longer than `STOP_TIMEOUT_S`, or a server that does not start or
+  get ready, fails the competition (a server that did not get ready is stopped
+  first), and the runner moves on to the next one. A server does not start when the
+  services dir cannot be created, its log or PID file cannot be written, or its
+  process cannot be spawned; a missing or broken `start` command still starts the
+  shell that runs it, so it shows as a server that exited before it was ready.
 
 The services dir is `OLLMPIADA_SERVICES_DIR`, default `.local/services` (see
 [environment](configuration.md#environment)). Besides the PID files it holds
