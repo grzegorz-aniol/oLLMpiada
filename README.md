@@ -213,7 +213,7 @@ The optional settings and why they are there:
   server with `start`, waits until its `models_url` lists the model and stops it
   when a competition does not need it. The llama.cpp router behind Bifrost keeps
   running: its `models_url` points at the router itself, not at Bifrost, and
-  `cleanup` unloads its models before a competition that does not use them
+  `cleanup` unloads its models before every competition and at the end
   ([servers](docs/experiments.md#servers)).
 
 Run `uv run ollmpiada models` to see what loaded and what is available. Every

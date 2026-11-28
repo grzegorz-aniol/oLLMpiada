@@ -68,7 +68,7 @@ walks through the same example and why each option is there.
 | `headers` | no | HTTP headers sent on every call to this provider's models, as a map of name to value; missing means none |
 | `start` | no | Shell command that starts the provider's server, which [`experiment run`](experiments.md#servers) then owns: it starts and stops it. Requires `models_url` |
 | `models_url` | no | GET URL listing the served models, which `experiment run` polls until a competition's models are listed; written out, never derived from `url` |
-| `cleanup` | no | Shell command that frees the GPU memory of a server that keeps running; `experiment run` runs it before a competition that does not use the provider and at the end |
+| `cleanup` | no | Shell command that frees the GPU memory of a server that keeps running; `experiment run` runs it before every competition, also one that uses the provider, and at the end |
 
 | `api` | Player | `url` |
 | --- | --- | --- |

@@ -44,7 +44,7 @@ from ollmpiada.games.base import (
 from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import Player, TransportError, TurnRequest, TurnResponse
 from ollmpiada.registry import MASTERS
-from ollmpiada.servers import ServerError, Servers, plan
+from ollmpiada.servers import ServerError, Servers, cleanups, plan, providers_of
 from ollmpiada.tui import (
     LiveView,
     PlainOutput,
@@ -424,9 +424,8 @@ def _dry_run(console: Console, models: dict[str, Model], experiment: Experiment)
     if not pending:
         console.print("Nothing to play: every competition is done.")
         return 0
-    providers = {m.provider.name: m.provider for m in models.values()}.values()
+    providers = providers_of(models).values()
     running: list[str] = []
-    used: set[str] = set()
     for number, row in pending:
         used = {m.provider.name for m in _models_of(row.planned.players, models)}
         steps = plan(providers, running, used)
@@ -438,8 +437,7 @@ def _dry_run(console: Console, models: dict[str, Model], experiment: Experiment)
         )
         _print_steps(console, stop=steps.stop, cleanup=steps.cleanup, start=steps.start)
     console.print("[bold]At the end:[/bold]")
-    cleanups = [p.name for p in providers if p.cleanup and p.name in used]
-    _print_steps(console, stop=running, cleanup=cleanups)
+    _print_steps(console, stop=running, cleanup=cleanups(providers))
     return 0
 
 

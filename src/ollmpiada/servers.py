@@ -39,6 +39,18 @@ class Plan:
     start: tuple[str, ...]
 
 
+def providers_of(models: dict[str, Model]) -> dict[str, Provider]:
+    """The providers of these models by name, each once."""
+    return {m.provider.name: m.provider for m in models.values()}
+
+
+def cleanups(providers: Iterable[Provider]) -> tuple[str, ...]:
+    """The providers with a `cleanup`, all run before every competition and at the end: a
+    server that keeps running may still hold the previous competition's model, even when the
+    next one uses the same server, and the warm-up loads what a competition needs again."""
+    return tuple(p.name for p in providers if p.cleanup)
+
+
 def plan(providers: Iterable[Provider], running: Iterable[str], used: set[str]) -> Plan:
     """The preparation for a competition whose players use the providers named `used`, while
     the owned servers named `running` are up."""
@@ -46,7 +58,7 @@ def plan(providers: Iterable[Provider], running: Iterable[str], used: set[str]) 
     running = list(running)
     return Plan(
         stop=tuple(name for name in running if name not in used),
-        cleanup=tuple(p.name for p in providers if p.cleanup and p.name not in used),
+        cleanup=cleanups(providers),
         start=tuple(
             p.name for p in providers if p.start and p.name in used and p.name not in running
         ),
@@ -114,8 +126,8 @@ class Servers:
     """The servers of the providers in `models`, prepared competition by competition.
 
     Used as a context manager: entering adopts the owned servers still running from an
-    earlier runner (their PID files in `pid_dir`); leaving stops every owned server and runs
-    the `cleanup` of the providers the last competition used.
+    earlier runner (their PID files in `pid_dir`); leaving stops every owned server and, once
+    a competition was prepared, runs every `cleanup`.
     """
 
     def __init__(
@@ -128,14 +140,14 @@ class Servers:
         stop_timeout_s: float = STOP_TIMEOUT_S,
         poll_s: float = POLL_S,
     ) -> None:
-        self._providers = {m.provider.name: m.provider for m in models.values()}
+        self._providers = providers_of(models)
         self._pid_dir = pid_dir
         self._say = say
         self._ready_timeout_s = ready_timeout_s
         self._stop_timeout_s = stop_timeout_s
         self._poll_s = poll_s
         self._owned: dict[str, _Server] = {}
-        self._used: set[str] = set()
+        self._prepared = False
 
     def __enter__(self) -> Servers:
         for provider in self._providers.values():
@@ -148,23 +160,25 @@ class Servers:
 
     def prepare(self, players: Iterable[Model]) -> None:
         """Make the servers ready for a competition of these players: stop the owned servers
-        they do not use, run the `cleanup` of the providers they do not use, start their owned
-        servers that are not up, and wait until each lists its players' models.
+        they do not use, run every `cleanup`, start their owned servers that are not up (again,
+        when one has exited), and wait until each lists its players' models.
 
         Raises:
             ServerError: A cleanup failed, or a server did not start or get ready; an owned
                 server that did not get ready is stopped.
         """
         players = list(players)
-        self._used = {m.provider.name for m in players}
-        steps = plan(self._providers.values(), self._owned, self._used)
+        used = {m.provider.name for m in players}
+        self._prepared = True
+        self._forget_exited()
+        steps = plan(self._providers.values(), self._owned, used)
         for name in steps.stop:
             self._stop(name)
         for name in steps.cleanup:
             self._cleanup(self._providers[name])
         for name in steps.start:
             self._start(self._providers[name])
-        for name in sorted(self._used):
+        for name in sorted(used):
             provider = self._providers[name]
             if provider.models_url:
                 wanted = [m.spec.model for m in players if m.provider.name == name]
@@ -176,17 +190,26 @@ class Servers:
                     raise
 
     def close(self) -> None:
-        """Stop every owned server and run the cleanups the last competition left; a failure
-        is logged, so the rest still runs."""
+        """Stop every owned server and, once a competition was prepared, run every cleanup; a
+        failure is logged, so the rest still runs."""
         for name in list(self._owned):
             self._stop(name)
-        for name in sorted(self._used):
-            if self._providers[name].cleanup:
+        if self._prepared:
+            for name in cleanups(self._providers.values()):
                 try:
                     self._cleanup(self._providers[name])
                 except ServerError as e:
                     log.warning("%s", e)
-        self._used = set()
+        self._prepared = False
+
+    def _forget_exited(self) -> None:
+        """Drop the owned servers whose processes have all exited (killed for memory, say), so
+        the next competition that uses one starts it again."""
+        for name, server in list(self._owned.items()):
+            if not server.alive():
+                del self._owned[name]
+                self._pid_file(name).unlink(missing_ok=True)
+                self._say(f"The server of {name} has exited")
 
     def _pid_file(self, name: str) -> Path:
         return self._pid_dir / f"{name}.pid"
@@ -211,22 +234,27 @@ class Servers:
 
     def _start(self, provider: Provider) -> None:
         assert provider.start
-        self._pid_dir.mkdir(parents=True, exist_ok=True)
         output = self._log_file(provider.name)
         self._say(f"Starting the server of {provider.name} (output in {output})")
-        with output.open("wb") as log_file:
-            # A new session puts the whole tree (just, its script, the server and its
-            # children) in one process group, which a stop signals at once.
-            process = subprocess.Popen(
-                provider.start,
-                shell=True,
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-            )
-        self._owned[provider.name] = _Server(process.pid, process)
-        self._pid_file(provider.name).write_text(str(process.pid))
+        try:
+            self._pid_dir.mkdir(parents=True, exist_ok=True)
+            with output.open("wb") as log_file:
+                # A new session puts the whole tree (just, its script, the server and its
+                # children) in one process group, which a stop signals at once.
+                process = subprocess.Popen(
+                    provider.start,
+                    shell=True,
+                    start_new_session=True,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                )
+            # Owned before the PID file is written, so a server whose file cannot be
+            # written is still stopped.
+            self._owned[provider.name] = _Server(process.pid, process)
+            self._pid_file(provider.name).write_text(str(process.pid))
+        except OSError as e:
+            raise ServerError(f"the server of {provider.name} did not start: {e}") from e
 
     def _wait_ready(self, provider: Provider, wanted: list[str]) -> None:
         assert provider.models_url

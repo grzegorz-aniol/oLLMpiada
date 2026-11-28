@@ -166,18 +166,24 @@ previous one loaded and starts what this one needs. It does so from three option
   Off Linux there is no `/proc` and nothing is adopted.
 - **Decision: GPU preparation before each competition.** In this order:
   1. stop every owned server the competition does not use;
-  2. run the `cleanup` of every provider it does not use;
+  2. run the `cleanup` of every provider that has one, used or not;
   3. start the owned servers it uses that are not running, then wait until every
      provider it uses is ready;
   4. play the competition, saving into the experiment's `runs/`.
 
   A provider is used when one of the competition's two players is one of its
-  models. A server the next competition still uses stays up, without a restart. On
-  exit, also after Ctrl+C or an error, the runner stops every owned server it
-  started or adopted and runs the `cleanup` of the providers the last competition
-  used. A `cleanup` that fails or takes longer than `STOP_TIMEOUT_S`, or a server
-  that does not start or get ready, fails the competition (a server that did not
-  get ready is stopped first), and the runner moves on to the next one.
+  models. Step 2 cleans up the providers the competition uses as well, because a
+  server that keeps running (the router) would otherwise hold the previous
+  competition's model next to the new one; the competition's warm-up loads what it
+  needs again. An owned server the next competition still uses stays up, without a
+  restart; one whose processes have all exited (killed for memory, say) is
+  forgotten, and started again in step 3 when the competition uses it. On exit,
+  also after Ctrl+C or an error, the runner stops every owned server it started or
+  adopted and, if it prepared a competition, runs every `cleanup`. A `cleanup` that
+  fails or takes longer than `STOP_TIMEOUT_S`, or a server that does not start (its
+  command or output file cannot be opened) or get ready, fails the competition (a
+  server that did not get ready is stopped first), and the runner moves on to the
+  next one.
 
 The services dir is `OLLMPIADA_SERVICES_DIR`, default `.local/services` (see
 [environment](configuration.md#environment)). Besides the PID files it holds

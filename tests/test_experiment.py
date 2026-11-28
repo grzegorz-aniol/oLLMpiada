@@ -381,6 +381,7 @@ def test_run_prepares_the_servers_before_each_competition_and_stops_them_at_the_
         "local is ready after",
         "Competition 1 of 2: local-llm@high vs basal-mini, run 1 of 1",
         "Stopping the server of local",
+        "Running the cleanup of claude-proxy",
         "Competition 2 of 2: claude@none vs basal-mini, run 1 of 1",
         "Running the cleanup of claude-proxy",
         "2 of 2 competitions done.",
@@ -388,7 +389,7 @@ def test_run_prepares_the_servers_before_each_competition_and_stops_them_at_the_
     position = 0
     for step in steps:  # in this order
         position = out.index(step, position) + len(step)
-    assert cleanups.read_text() == "claude-proxy\n" * 2
+    assert cleanups.read_text() == "claude-proxy\n" * 3
     assert len(competitions) == 2 and gone(fake.child)
 
 
@@ -464,7 +465,7 @@ def test_dry_run_prints_the_preparation_and_touches_nothing(
         "  start: basal",
         "Competition 3 of 3: claude@none vs local-llm@high",
         "  stop: basal",
-        "  cleanup: -",
+        "  cleanup: claude-proxy",
         "  start: local",
         "At the end:",
         "  stop: local",

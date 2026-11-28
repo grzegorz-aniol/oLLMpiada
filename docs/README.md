@@ -16,7 +16,7 @@ for every change, then only the subject you touch; you do not need every sibling
 | Components, data flow, CLI commands and terminal UI, where code lives | [Architecture](architecture.md) |
 | Refereeing: game interface, turns, prompts, answers, end of game, statistics | [Game master](game-master/README.md) |
 | Bridge: contract rule, seats, card play, result, PBN record | [Bridge](game-master/bridge.md) |
-| Experiments: folder, `experiment.json`, done runs, `ollmpiada experiment` | [Experiments](experiments.md) |
+| Experiments: folder, `experiment.json`, done runs, `ollmpiada experiment`; inference servers and the provider fields `start`, `models_url`, `cleanup` | [Experiments](experiments.md) |
 | Model config file, providers, tokens, environment variables | [Configuration](configuration.md) |
 | Coding rules that apply to every change | [Conventions](conventions.md) |
 | Setup, commands, agent configuration, contribution workflow | [Development](development.md) |

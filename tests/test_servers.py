@@ -202,15 +202,58 @@ def test_preparation_order_across_competitions(tmp_path, pid_dir):
         # a vs b: a stays up
         "Running the cleanup of router",
         "Starting the server of b",
-        # router vs b: b stays up
+        # router vs b: b stays up, and the router is cleaned up although it is used
         "Stopping the server of a",
-        # the end: router was used last
+        "Running the cleanup of router",
+        # the end
         "Stopping the server of b",
         "Running the cleanup of router",
     ]
     assert [text for text in said if "is ready" in text][0].startswith("a is ready after")
-    assert cleanups.read_text() == "router\n" * 3
+    assert cleanups.read_text() == "router\n" * 4
     assert gone(second.child)
+
+
+def reaped(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def test_a_server_that_exited_between_competitions_is_started_again(tmp_path, pid_dir):
+    fake = FakeServer(tmp_path, "basal", "--models", "Org/Model-GGUF")
+    basal = model("basal", start=fake.command, models_url=fake.url)
+    said: list[str] = []
+    with servers(pid_dir, basal, said=said) as s:
+        s.prepare([basal])
+        crashed, child = int((pid_dir / "basal.pid").read_text()), fake.child
+        os.killpg(crashed, signal.SIGKILL)  # as the kernel kills a server out of memory
+        # The child's zombie, reaped by init, would keep the group signalable; the leader's
+        # is reaped by the runner.
+        deadline = time.monotonic() + 5
+        while not (gone(crashed) and reaped(child)) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        s.prepare([basal])
+        assert served_models(fake.url) == ["Org/Model-GGUF"]
+        assert int((pid_dir / "basal.pid").read_text()) != crashed
+    actions = [text.split(" (")[0] for text in said if "is ready" not in text]
+    assert actions == [
+        "Starting the server of basal",
+        "The server of basal has exited",
+        "Starting the server of basal",
+        "Stopping the server of basal",
+    ]
+
+
+def test_a_server_that_cannot_be_started_fails_the_preparation(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    basal = model("basal", start="unused", models_url="http://127.0.0.1:9/models")
+    with servers(blocker / "services", basal) as s:
+        with pytest.raises(ServerError, match="^the server of basal did not start: "):
+            s.prepare([basal])
 
 
 def test_servers_are_stopped_and_cleaned_up_after_an_exception(tmp_path, pid_dir):
@@ -223,7 +266,7 @@ def test_servers_are_stopped_and_cleaned_up_after_an_exception(tmp_path, pid_dir
             s.prepare([basal, router])
             raise RuntimeError("a bug")
     assert gone(fake.child)
-    assert cleanups.read_text() == "router\n"
+    assert cleanups.read_text() == "router\n" * 2  # before the competition and at the end
 
 
 def test_a_failing_cleanup_fails_the_preparation(tmp_path, pid_dir):
