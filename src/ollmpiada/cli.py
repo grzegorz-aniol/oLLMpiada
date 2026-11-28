@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import dataclasses
 import logging
 import secrets
 import signal
@@ -16,13 +17,22 @@ from rich.markup import escape
 from rich.table import Column, Table
 
 from ollmpiada.competition import (
+    DEFAULT_MAX_TURNS,
     Competition,
     CompetitionEvent,
     CompetitionSetupError,
     CompetitionState,
+    default_max_turns,
     load_state,
 )
 from ollmpiada.config import ConfigError, Model, Settings, load_models, load_settings
+from ollmpiada.experiment import (
+    Experiment,
+    ExperimentError,
+    Progress,
+    load_experiment,
+    progress,
+)
 from ollmpiada.game_master import GameMaster
 from ollmpiada.games.base import (
     SAMPLE_SEED,
@@ -43,11 +53,12 @@ from ollmpiada.tui import (
     summary_lines,
 )
 
-DEFAULT_MAX_TURNS = 50
 MIN_BOARDS = 8
 """Boards (duplicate pairs of games) below which `run` warns that the comparison says little
 about skill, since a trick or two won on a few deals is mostly chance."""
 REFRESH_S = 1.0
+
+log = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,6 +96,15 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--mode", choices=["visual", "background"], default="visual")
     show = commands.add_parser("show", help="print the results of a saved competition")
     show.add_argument("run_dir", type=Path)
+    experiment = commands.add_parser(
+        "experiment", help="play and inspect experiments, folders of planned competitions"
+    )
+    actions = experiment.add_subparsers(dest="action", required=True)
+    actions.add_parser("list", help="list experiments with how many competitions are done")
+    status = actions.add_parser("status", help="show each competition's runs")
+    status.add_argument("id", help="the experiment's folder name")
+    play = actions.add_parser("run", help="play the competitions that are not done yet")
+    play.add_argument("id", help="the experiment's folder name")
     args = parser.parse_args(argv)
 
     console = Console()
@@ -102,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "probe":
         return _probe(console, settings, models, args.player, MASTERS[args.game])
+    if args.command == "experiment":
+        return _experiment(console, settings, models, args)
     return _run(console, settings, models, args)
 
 
@@ -131,10 +153,6 @@ def _models_table(models: dict[str, Model]) -> Table:
     return table
 
 
-def _default_max_turns(game: Game) -> int | None:
-    return DEFAULT_MAX_TURNS if game.turn_limit else None
-
-
 def _probe(
     console: Console, settings: Settings, models: dict[str, Model], name: str, master: GameMaster
 ) -> int:
@@ -149,7 +167,7 @@ def _probe(
     turns: dict[bool, int] = {}
     for turn in (1, first_full_move()):
         turns.setdefault(master.game.move_only(turn), turn)
-    max_turns = _default_max_turns(master.game)
+    max_turns = default_max_turns(master.game)
     requests: dict[str, TurnRequest] = {}
     for move_only, turn in turns.items():
         label = "Opening turn" if turn == 1 else f"Move {turn}"
@@ -207,31 +225,70 @@ def _run(
         # Statistics are kept per player name, so the two names must differ.
         console.print("[red]Pick two different players[/red] (for example another effort).")
         return 2
-    try:
-        players = (
-            create_player(args.first, models, timeout_s=settings.request_timeout_s),
-            create_player(args.second, models, timeout_s=settings.request_timeout_s),
-        )
-    except PlayerError as e:
-        console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
-        return 2
-
-    master = MASTERS[args.game]
-    game = master.game
+    game = MASTERS[args.game].game
     if args.max_turns is not None and not game.turn_limit:
         console.print(f"[red]{game.name} has no turn limit;[/red] drop --max-turns.")
         return 2
-    publish, live = _output(console, master, visual=args.mode == "visual")
+    state = _compete(
+        console,
+        settings,
+        models,
+        args.game,
+        (args.first, args.second),
+        games=args.games,
+        max_turns=args.max_turns or default_max_turns(game),
+        seed=args.seed,
+        visual=args.mode == "visual",
+    )
+    if state is None:
+        return 2
+    return 0 if state.status == "finished" else 1
+
+
+def _compete(
+    console: Console,
+    settings: Settings,
+    models: dict[str, Model],
+    game_name: str,
+    names: tuple[str, str],
+    *,
+    games: int,
+    max_turns: int | None,
+    seed: int | None,
+    visual: bool,
+) -> CompetitionState | None:
+    """Play one competition into `settings.runs_dir` and print its summary; None when it could
+    not start, after printing why. A missing seed is drawn at random."""
+    try:
+        players = (
+            create_player(names[0], models, timeout_s=settings.request_timeout_s),
+            create_player(names[1], models, timeout_s=settings.request_timeout_s),
+        )
+    except PlayerError as e:
+        console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
+        return None
+
+    master = MASTERS[game_name]
+    game = master.game
+    publish, live = _output(console, master, visual=visual)
     try:
         # Built before anything starts, so a rule it enforces (an even number of games for a
         # duplicate game) stops the run with its own message.
-        competition = _competition(master, players, args, settings, publish)
+        competition = Competition(
+            master,
+            players,
+            games=games,
+            max_turns=max_turns,
+            runs_dir=settings.runs_dir,
+            seed=secrets.randbelow(2**31) if seed is None else seed,
+            publish=publish,
+        )
     except CompetitionSetupError as e:
         console.print(f"[red]{escape(str(e))}[/red]", highlight=False)
-        return 2
-    if game.duplicate and args.games < 2 * MIN_BOARDS:
+        return None
+    if game.duplicate and games < 2 * MIN_BOARDS:
         console.print(
-            f"[yellow]Only {args.games // 2} of the {MIN_BOARDS} boards recommended:[/yellow] "
+            f"[yellow]Only {games // 2} of the {MIN_BOARDS} boards recommended:[/yellow] "
             f"a few boards say little about skill (--games {2 * MIN_BOARDS} plays {MIN_BOARDS}).",
             highlight=False,
             soft_wrap=True,
@@ -241,11 +298,11 @@ def _run(
             state = _play_competition(console, competition, live)
     except GameSetupError as e:
         console.print(f"[red]Cannot start {game.name}:[/red] {escape(str(e))}", highlight=False)
-        return 2
+        return None
 
     _print_summary(console, state, duplicate=game.duplicate)
     console.print(f"Saved to {competition.run_dir}", highlight=False, soft_wrap=True)
-    return 0 if state.status == "finished" else 1
+    return state
 
 
 def _output(
@@ -276,24 +333,6 @@ def _play_competition(
         return asyncio.run(_play(competition, tick=live.refresh))
 
 
-def _competition(
-    master: GameMaster,
-    players: tuple[Player, Player],
-    args: argparse.Namespace,
-    settings: Settings,
-    publish: Callable[[CompetitionEvent], None],
-) -> Competition:
-    return Competition(
-        master,
-        players,
-        games=args.games,
-        max_turns=args.max_turns or _default_max_turns(master.game),
-        runs_dir=settings.runs_dir,
-        seed=secrets.randbelow(2**31) if args.seed is None else args.seed,
-        publish=publish,
-    )
-
-
 async def _play(
     competition: Competition, tick: Callable[[], None] | None = None
 ) -> CompetitionState:
@@ -316,6 +355,122 @@ async def _every(seconds: float, action: Callable[[], None]) -> None:
     while True:
         await asyncio.sleep(seconds)
         action()
+
+
+def _experiment(
+    console: Console, settings: Settings, models: dict[str, Model], args: argparse.Namespace
+) -> int:
+    if args.action == "list":
+        return _list_experiments(console, settings.experiments_dir, models)
+    try:
+        experiment = load_experiment(settings.experiments_dir / args.id, models)
+    except ExperimentError as e:
+        console.print(f"[red]Cannot load experiment:[/red] {escape(str(e))}", highlight=False)
+        return 2
+    if args.action == "status":
+        console.print(_progress_table(progress(experiment)))
+        return 0
+    return _run_experiment(console, settings, models, experiment)
+
+
+def _list_experiments(console: Console, root: Path, models: dict[str, Model]) -> int:
+    folders = sorted(path for path in root.iterdir() if path.is_dir()) if root.is_dir() else []
+    if not folders:
+        console.print(f"No experiments in {root}", highlight=False)
+        return 0
+    table = Table(Column("Experiment", no_wrap=True), "Competitions done")
+    for folder in folders:
+        try:
+            rows = progress(load_experiment(folder, models))
+            done = f"{sum(row.done for row in rows)}/{len(rows)}"
+        except ExperimentError as e:
+            done = f"[red]invalid:[/red] {escape(str(e))}"
+        table.add_row(folder.name, done)
+    console.print(table)
+    return 0
+
+
+def _progress_table(rows: list[Progress]) -> Table:
+    table = Table("#", "Players", "Runs", "Finished", "Failed", "Run folders")
+    for number, row in enumerate(rows, 1):
+        folders = (
+            run.path.name if run.status == "finished" else f"{run.path.name} ({run.status})"
+            for run in row.runs
+        )
+        table.add_row(
+            str(number),
+            " vs ".join(row.planned.players),
+            str(row.planned.runs),
+            f"[green]{row.finished}[/green]" if row.done else str(row.finished),
+            str(row.failed),
+            "\n".join(folders) or "-",
+        )
+    return table
+
+
+def _run_experiment(
+    console: Console, settings: Settings, models: dict[str, Model], experiment: Experiment
+) -> int:
+    """Play the missing runs in file order; a competition that does not finish is reported and
+    the next one starts, unless it was stopped (Ctrl+C), which ends the experiment.
+
+    Exit code 0 when every competition is done afterwards, 1 otherwise.
+    """
+    rows = progress(experiment)
+    if all(row.done for row in rows):
+        console.print("Nothing to play: every competition is done.")
+    settings = dataclasses.replace(settings, runs_dir=experiment.runs_dir)
+    failed: list[str] = []
+    for number, row in enumerate(rows, 1):
+        status = "finished"
+        for run in range(row.finished + 1, row.planned.runs + 1):
+            console.print(
+                f"[bold]Competition {number} of {len(rows)}:[/bold] "
+                f"{' vs '.join(row.planned.players)}, run {run} of {row.planned.runs}",
+                highlight=False,
+                soft_wrap=True,
+            )
+            status = _attempt(console, settings, models, experiment, row.planned.players)
+            if status != "finished":
+                break
+        if status == "stopped":
+            break
+        if status != "finished":
+            failed.append(str(number))
+
+    rows = progress(experiment)
+    done = sum(row.done for row in rows)
+    console.print(_progress_table(rows))
+    failures = f"; failed this time: {', '.join(failed)}" if failed else ""
+    console.print(f"{done} of {len(rows)} competitions done{failures}.", highlight=False)
+    return 0 if done == len(rows) else 1
+
+
+def _attempt(
+    console: Console,
+    settings: Settings,
+    models: dict[str, Model],
+    experiment: Experiment,
+    players: tuple[str, str],
+) -> str:
+    """Play one competition of the experiment; its status, or `failed` when it could not start
+    or raised, so one broken competition does not end the experiment."""
+    try:
+        state = _compete(
+            console,
+            settings,
+            models,
+            experiment.game,
+            players,
+            games=experiment.games,
+            max_turns=experiment.max_turns,
+            seed=None,
+            visual=False,
+        )
+    except Exception:
+        log.exception("competition %s vs %s failed", *players)
+        return "failed"
+    return "failed" if state is None else state.status
 
 
 def _show(console: Console, run_dir: Path) -> int:

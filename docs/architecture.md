@@ -1,5 +1,5 @@
 ---
-related: ["README.md", "product.md", "game-master/README.md", "configuration.md"]
+related: ["README.md", "product.md", "game-master/README.md", "configuration.md", "experiments.md"]
 ---
 
 # Architecture
@@ -104,7 +104,8 @@ status line shows). An aborted game ends the competition.
 
 Results go to `<runs dir>/<YYYYmmdd-HHMMSS>_<a>_vs_<b>/`, where the runs dir is
 `OLLMPIADA_RUNS_DIR` (default `.local/runs`, see
-[configuration](configuration.md#environment)). Missing parent folders are
+[configuration](configuration.md#environment)), or an experiment's `runs/` when
+[`ollmpiada experiment run`](experiments.md#commands) plays it. Missing parent folders are
 created; an existing run folder stops the run instead of mixing two competitions.
 The files are rewritten after every game so a crash loses at most the game in
 progress:
@@ -142,6 +143,7 @@ argparse subcommands; Rich renders everything the user sees.
 | `ollmpiada probe <model>[@effort]` | Sends one turn in the game's start per answer format: for chess an [opening](game-master/turns.md#opening) turn (move only) and a move-6 turn (full answer), for a game whose turns are all move-only (bridge) one turn, the opening lead; prints each parsed answer, time and tokens and exits 0 only when every answer matches its format; flag `--game` |
 | `ollmpiada run <a>[@effort] <b>[@effort]` | Plays a competition; flags `--game` (`chess`, the default, or `bridge`), `--games`, `--max-turns`, `--seed`, `--mode visual\|background` |
 | `ollmpiada show <run-dir>` | Prints the results and statistics of a saved competition, with the [board table](game-master/results.md#statistics) for a game played in duplicate pairs |
+| `ollmpiada experiment list\|status <id>\|run <id>` | Lists experiments, shows one's competitions and runs, or plays its pending competitions one after another through the same code as `run`; owned by [experiments](experiments.md#commands) |
 
 A model is named `<id>@<effort>`, as in
 [model fields](configuration.md#model-fields). `run` checks the models and efforts
@@ -218,7 +220,12 @@ same tables.
 ## Code map
 
 - `src/ollmpiada/__init__.py` - `main()`: load `.env`, configure logging, run the CLI.
-- `src/ollmpiada/cli.py` - argparse subcommands `models`, `probe`, `run`, `show`.
+- `src/ollmpiada/cli.py` - argparse subcommands `models`, `probe`, `run`, `show` and
+  `experiment` (`list`, `status`, `run`); `_compete` plays one competition for both
+  `run` and `experiment run`.
+- `src/ollmpiada/experiment.py` - loads and validates `experiment.json`
+  (`load_experiment`) and reads each planned competition's runs from `runs/`
+  (`progress`); see [experiments](experiments.md).
 - `src/ollmpiada/config.py` - settings, model config models and loader.
 - `src/ollmpiada/registry.py` - `MASTERS`, the game masters by game name for
   `--game` (`chess`, `bridge`); outside `games/` because `game_master.py` imports
@@ -234,7 +241,8 @@ same tables.
 - `src/ollmpiada/game_master.py` - the `GameMaster` protocol and `TurnBasedMaster`:
   one game's turn loop, the warm-up call before the first game and the probe's turn
   requests.
-- `src/ollmpiada/competition.py` - runner, statistics, events, persistence.
+- `src/ollmpiada/competition.py` - runner, statistics, events, persistence, and the
+  settings rules `run` and experiments share (`default_max_turns`, `check_games`).
 - `src/ollmpiada/tui.py` - Rich live view, results and statistics tables,
   plain output for scripts.
 - `config/models.json` - providers and models; gitignored, since it is each
@@ -244,4 +252,5 @@ same tables.
   `test_game_master.py`, ...), `fakes.py` (scripted fake players), `test_docs.py` (runs the docs check) and `test_golden.py` with `golden/` (the pinned model-facing requests); see [testing](testing.md).
 - `scripts/check_docs.py` - the docs link and reachability check.
 - `.local/runs/` - competition results, gitignored with the rest of `.local/`.
+- `.local/experiments/` - [experiments](experiments.md), each with its own `runs/`.
 - `docs/images/` - images for the README and docs, as WebP sized for the page.

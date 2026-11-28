@@ -126,6 +126,17 @@ uv run ollmpiada run qwen3-8b@low claude-haiku@none --games 4
 uv run ollmpiada run qwen3-8b@low claude-haiku@none --game bridge --games 4
 ```
 
+To play a planned set of competitions, write an experiment: a folder
+`.local/experiments/<id>/` with an `experiment.json` listing the games and the
+pairs to play. `run` plays whatever is not finished yet, so it can be repeated
+after a failure ([experiments](docs/experiments.md)):
+
+```bash
+uv run ollmpiada experiment list          # experiments and how many competitions are done
+uv run ollmpiada experiment status <id>   # each competition with its runs
+uv run ollmpiada experiment run <id>      # play the pending competitions
+```
+
 ## Configuring models
 
 Models live in `config/models.json` (gitignored, since providers differ per
@@ -203,7 +214,8 @@ field, its validation and the reasoning behind it are in
 
 ## Status
 
-Chess is complete: `models`, `probe`, `run` and `show` work with real models.
+Chess is complete: `models`, `probe`, `run` and `show` work with real models;
+`experiment` plays planned sets of competitions.
 Bridge card play runs end to end with scripted players; the first runs with real
 models are next.
 
@@ -213,6 +225,7 @@ models are next.
 - [docs/product.md](docs/product.md) - what the app does and does not do.
 - [docs/game-master/README.md](docs/game-master/README.md) - refereeing, prompts and statistics.
 - [docs/configuration.md](docs/configuration.md) - `config/models.json` and `.env`.
+- [docs/experiments.md](docs/experiments.md) - experiment folders and `ollmpiada experiment`.
 
 ## Name
 

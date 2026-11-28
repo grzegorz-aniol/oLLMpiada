@@ -222,6 +222,28 @@ class CompetitionSetupError(ValueError):
     """The competition's settings break one of its rules; the message says which."""
 
 
+DEFAULT_MAX_TURNS = 50
+"""Moves per side before adjudication when a competition of a game with a turn limit names
+none."""
+
+
+def default_max_turns(game: Game) -> int | None:
+    return DEFAULT_MAX_TURNS if game.turn_limit else None
+
+
+def check_games(game: Game, games: int) -> None:
+    """Check the number of games against the game's rules.
+
+    Raises:
+        CompetitionSetupError: An odd number of games for a game played in duplicate pairs.
+    """
+    if games % 2 and game.duplicate:
+        raise CompetitionSetupError(
+            f"{game.name} plays every start twice, once from each side; "
+            f"pick an even number of games, not {games}"
+        )
+
+
 class Competition:
     def __init__(
         self,
@@ -248,11 +270,7 @@ class Competition:
             raise CompetitionSetupError(
                 f"both players are named {names[0]!r}; statistics need two names"
             )
-        if games % 2 and game.duplicate:
-            raise CompetitionSetupError(
-                f"{game.name} plays every start twice, once from each side; "
-                f"pick an even number of games, not {games}"
-            )
+        check_games(game, games)
         self.state = CompetitionState(
             game=game.name,
             side_names=game.side_names,

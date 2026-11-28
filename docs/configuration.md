@@ -193,6 +193,7 @@ not read it. `.env.example` lists the variable names with empty values.
 | --- | --- | --- |
 | `OLLMPIADA_MODELS_CONFIG` | `config/models.json` | Path to the model config |
 | `OLLMPIADA_RUNS_DIR` | `.local/runs` | Where competition results are written |
+| `OLLMPIADA_EXPERIMENTS_DIR` | `.local/experiments` | Where [experiments](experiments.md#experiment-folder) live; an experiment's competitions are written to its own `runs/` instead of `OLLMPIADA_RUNS_DIR` |
 | `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call in seconds; a provider's `timeout_s` overrides it ([provider fields](#provider-fields)) |
 | `OLLMPIADA_STOCKFISH` | `stockfish` (looked up on `PATH`) | Path to the Stockfish binary that adjudicates chess games at the turn limit; required for chess ([end of game](game-master/results.md#end-of-game)) |
 | *names from `token_env`* | none | Provider tokens |

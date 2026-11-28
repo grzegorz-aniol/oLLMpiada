@@ -52,8 +52,9 @@ The rules of refereeing, prompting and scoring are owned by
   with nothing else to run, and the same command can be scripted.
 - **Decision:** one competition runs at a time, its games one after another.
   Parallel games are a later option, not part of the MVP.
-- **Decision:** results are written to disk per competition (`.local/runs/`), so a
-  finished competition can be inspected after a restart. Leaderboards across
+- **Decision:** results are written to disk per competition (`.local/runs/`, or
+  the [experiment](experiments.md)'s own folder), so a finished competition can be
+  inspected after a restart. Leaderboards across
   competitions are not part of the MVP.
 
 ## Non-goals

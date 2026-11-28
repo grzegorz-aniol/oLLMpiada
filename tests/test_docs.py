@@ -3,7 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ollmpiada.cli import DEFAULT_MAX_TURNS, MIN_BOARDS
+from ollmpiada.cli import MIN_BOARDS
+from ollmpiada.competition import DEFAULT_MAX_TURNS
 from ollmpiada.game_master import ATTEMPTS_PER_TURN
 from ollmpiada.games.base import OPENING_MOVES
 from ollmpiada.games.bridge import FIT
