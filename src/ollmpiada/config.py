@@ -33,6 +33,8 @@ class Settings:
     models_config: Path
     runs_dir: Path
     experiments_dir: Path
+    services_dir: Path
+    """PID files and output of the servers experiments start."""
     request_timeout_s: float
     stockfish: str
     """The Stockfish binary: a path, or a name looked up on PATH."""
@@ -55,22 +57,28 @@ def load_settings(env: Mapping[str, str] = os.environ) -> Settings:
         models_config=Path(env.get("OLLMPIADA_MODELS_CONFIG") or "config/models.json"),
         runs_dir=Path(env.get("OLLMPIADA_RUNS_DIR") or ".local/runs"),
         experiments_dir=Path(env.get("OLLMPIADA_EXPERIMENTS_DIR") or ".local/experiments"),
+        services_dir=Path(env.get("OLLMPIADA_SERVICES_DIR") or ".local/services"),
         request_timeout_s=request_timeout_s,
         stockfish=env.get("OLLMPIADA_STOCKFISH") or "stockfish",
     )
 
 
-class _Strict(BaseModel):
+class Strict(BaseModel):
+    """A config file entry: unknown fields are errors and loaded values do not change."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class Provider(_Strict):
+class Provider(Strict):
     name: str
     url: str
     api: Api
     token_env: str | None = None
     timeout_s: Annotated[float, Field(gt=0)] | None = None
     headers: dict[Annotated[str, Field(min_length=1)], str] = {}
+    start: Annotated[str, Field(min_length=1)] | None = None
+    models_url: Annotated[str, Field(pattern=r"^https?://")] | None = None
+    cleanup: Annotated[str, Field(min_length=1)] | None = None
 
     @field_validator("headers")
     @classmethod
@@ -80,8 +88,15 @@ class Provider(_Strict):
             raise ValueError("Authorization comes from token_env, not from headers")
         return headers
 
+    @model_validator(mode="after")
+    def _start_needs_models_url(self) -> Provider:
+        # Readiness and the end of a stop are both read from the models list.
+        if self.start and not self.models_url:
+            raise ValueError(f"provider {self.name!r}: start needs models_url")
+        return self
 
-class ModelSpec(_Strict):
+
+class ModelSpec(Strict):
     id: str
     provider: str
     model: str
@@ -92,7 +107,7 @@ class ModelSpec(_Strict):
     output_mode: OutputMode = "tool"
 
 
-class ModelsFile(_Strict):
+class ModelsFile(Strict):
     providers: list[Provider]
     models: list[ModelSpec]
 

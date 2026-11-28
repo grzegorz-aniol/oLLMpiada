@@ -48,6 +48,17 @@ uv run pytest tests/test_x.py -k name   # one test
   in `tests/fakes.py`, chess whose `evaluate` returns prepared scores, and CLI
   tests replace `ChessGame.session` so no engine starts. One test runs the real
   Stockfish and is skipped when it is not installed.
+- Experiment [servers](experiments.md#servers) are tested without a GPU or a real
+  server: `tests/fake_server.py` is a small HTTP server a provider's `start`
+  command runs; it lists models in either shape, can ignore SIGTERM, and keeps a
+  child process in its group, so a test can check that a stop ends the whole
+  group. `FakeServer` in `tests/fakes.py` builds its command line on a free port.
+  Tests give `Servers` short timeouts; CLI tests shorten its defaults (fixture
+  `quick_servers` in `tests/test_experiment.py`), and the `models_file` fixture
+  points `OLLMPIADA_SERVICES_DIR` into the test's `tmp_path`. A test that starts
+  the fake server itself starts it in a new session (`start_detached` in
+  `tests/test_servers.py`) and kills the whole group with `os.killpg`, because
+  killing the server alone leaves its child running.
 - The [game hooks](game-master/README.md#game-abstraction) set the way chess
   never sets them (`move_only` always true, no `turn_limit`, a recording `forfeit`,
   a `move_mark` that does not follow move pairs, its own wording of answer format,

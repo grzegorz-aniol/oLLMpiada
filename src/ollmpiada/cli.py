@@ -6,7 +6,7 @@ import dataclasses
 import logging
 import secrets
 import signal
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,9 +41,10 @@ from ollmpiada.games.base import (
     IllegalMove,
     first_full_move,
 )
-from ollmpiada.players import PlayerError, create_player
+from ollmpiada.players import PlayerError, create_player, resolve_player
 from ollmpiada.players.base import Player, TransportError, TurnRequest, TurnResponse
 from ollmpiada.registry import MASTERS
+from ollmpiada.servers import ServerError, Servers, plan
 from ollmpiada.tui import (
     LiveView,
     PlainOutput,
@@ -105,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("id", help="the experiment's folder name")
     play = actions.add_parser("run", help="play the competitions that are not done yet")
     play.add_argument("id", help="the experiment's folder name")
+    play.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print which servers each pending competition stops, cleans up and starts",
+    )
     args = parser.parse_args(argv)
 
     console = Console()
@@ -370,6 +376,8 @@ def _experiment(
     if args.action == "status":
         console.print(_progress_table(progress(experiment)))
         return 0
+    if args.dry_run:
+        return _dry_run(console, models, experiment)
     return _run_experiment(console, settings, models, experiment)
 
 
@@ -408,11 +416,49 @@ def _progress_table(rows: list[Progress]) -> Table:
     return table
 
 
+def _dry_run(console: Console, models: dict[str, Model], experiment: Experiment) -> int:
+    """Print the server preparation of each pending competition, as `run` would do it starting
+    with no server running; starts, stops and asks nothing."""
+    rows = progress(experiment)
+    pending = [(number, row) for number, row in enumerate(rows, 1) if not row.done]
+    if not pending:
+        console.print("Nothing to play: every competition is done.")
+        return 0
+    providers = {m.provider.name: m.provider for m in models.values()}.values()
+    running: list[str] = []
+    used: set[str] = set()
+    for number, row in pending:
+        used = {m.provider.name for m in _models_of(row.planned.players, models)}
+        steps = plan(providers, running, used)
+        running = [name for name in running if name in used] + list(steps.start)
+        console.print(
+            f"[bold]Competition {number} of {len(rows)}:[/bold] {' vs '.join(row.planned.players)}",
+            highlight=False,
+            soft_wrap=True,
+        )
+        _print_steps(console, stop=steps.stop, cleanup=steps.cleanup, start=steps.start)
+    console.print("[bold]At the end:[/bold]")
+    cleanups = [p.name for p in providers if p.cleanup and p.name in used]
+    _print_steps(console, stop=running, cleanup=cleanups)
+    return 0
+
+
+def _print_steps(console: Console, **steps: Iterable[str]) -> None:
+    for label, names in steps.items():
+        console.print(f"  {label}: {', '.join(names) or '-'}", highlight=False)
+
+
+def _models_of(players: tuple[str, str], models: dict[str, Model]) -> list[Model]:
+    return [resolve_player(name, models)[0] for name in players]
+
+
 def _run_experiment(
     console: Console, settings: Settings, models: dict[str, Model], experiment: Experiment
 ) -> int:
-    """Play the missing runs in file order; a competition that does not finish is reported and
-    the next one starts, unless it was stopped (Ctrl+C), which ends the experiment.
+    """Play the missing runs in file order, preparing the servers before each competition; a
+    competition that does not finish is reported and the next one starts, unless it was
+    stopped (Ctrl+C), which ends the experiment. Owned servers are stopped at the end, also
+    after an error.
 
     Exit code 0 when every competition is done afterwards, 1 otherwise.
     """
@@ -421,22 +467,32 @@ def _run_experiment(
         console.print("Nothing to play: every competition is done.")
     settings = dataclasses.replace(settings, runs_dir=experiment.runs_dir)
     failed: list[str] = []
-    for number, row in enumerate(rows, 1):
-        status = "finished"
-        for run in range(row.finished + 1, row.planned.runs + 1):
-            console.print(
-                f"[bold]Competition {number} of {len(rows)}:[/bold] "
-                f"{' vs '.join(row.planned.players)}, run {run} of {row.planned.runs}",
-                highlight=False,
-                soft_wrap=True,
-            )
-            status = _attempt(console, settings, models, experiment, row.planned.players)
-            if status != "finished":
-                break
-        if status == "stopped":
-            break
-        if status != "finished":
-            failed.append(str(number))
+
+    def say(text: str) -> None:
+        console.print(text, highlight=False, soft_wrap=True)
+
+    try:
+        with Servers(models, settings.services_dir, say=say) as servers:
+            for number, row in enumerate(rows, 1):
+                if row.done:
+                    continue
+                try:
+                    servers.prepare(_models_of(row.planned.players, models))
+                except ServerError as e:
+                    console.print(
+                        f"[red]Competition {number}:[/red] {escape(str(e))}",
+                        highlight=False,
+                        soft_wrap=True,
+                    )
+                    status = "failed"
+                else:
+                    status = _play_runs(console, settings, models, experiment, row, number)
+                if status == "stopped":
+                    break
+                if status != "finished":
+                    failed.append(str(number))
+    except KeyboardInterrupt:
+        console.print("[yellow]Experiment stopped.[/yellow]")
 
     rows = progress(experiment)
     done = sum(row.done for row in rows)
@@ -444,6 +500,30 @@ def _run_experiment(
     failures = f"; failed this time: {', '.join(failed)}" if failed else ""
     console.print(f"{done} of {len(rows)} competitions done{failures}.", highlight=False)
     return 0 if done == len(rows) else 1
+
+
+def _play_runs(
+    console: Console,
+    settings: Settings,
+    models: dict[str, Model],
+    experiment: Experiment,
+    row: Progress,
+    number: int,
+) -> str:
+    """Play the missing runs of one competition until one does not finish; its status."""
+    total = len(experiment.competitions)
+    status = "finished"
+    for run in range(row.finished + 1, row.planned.runs + 1):
+        console.print(
+            f"[bold]Competition {number} of {total}:[/bold] "
+            f"{' vs '.join(row.planned.players)}, run {run} of {row.planned.runs}",
+            highlight=False,
+            soft_wrap=True,
+        )
+        status = _attempt(console, settings, models, experiment, row.planned.players)
+        if status != "finished":
+            break
+    return status
 
 
 def _attempt(

@@ -44,11 +44,13 @@ def models_data() -> dict:
 
 @pytest.fixture
 def models_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A model config file the CLI picks up through OLLMPIADA_MODELS_CONFIG."""
+    """A model config file the CLI picks up through OLLMPIADA_MODELS_CONFIG; runs and server
+    files go to `tmp_path`."""
     path = tmp_path / "models.json"
     path.write_text(json.dumps(MODELS))
     monkeypatch.setenv("OLLMPIADA_MODELS_CONFIG", str(path))
     monkeypatch.setenv("OLLMPIADA_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("OLLMPIADA_SERVICES_DIR", str(tmp_path / "services"))
     monkeypatch.setenv("TEST_HOSTED_KEY", "secret")
     return path
 

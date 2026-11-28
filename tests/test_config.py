@@ -18,6 +18,7 @@ def test_settings_defaults():
     assert settings.models_config == Path("config/models.json")
     assert settings.runs_dir == Path(".local/runs")
     assert settings.experiments_dir == Path(".local/experiments")
+    assert settings.services_dir == Path(".local/services")
     assert settings.request_timeout_s == 120
     assert settings.stockfish == "stockfish"
 
@@ -28,12 +29,13 @@ def test_settings_from_environment():
             "OLLMPIADA_MODELS_CONFIG": "x.json",
             "OLLMPIADA_RUNS_DIR": "out",
             "OLLMPIADA_EXPERIMENTS_DIR": "exp",
+            "OLLMPIADA_SERVICES_DIR": "svc",
             "OLLMPIADA_REQUEST_TIMEOUT_S": "7.5",
             "OLLMPIADA_STOCKFISH": "/opt/sf/stockfish",
         }
     )
     assert settings == type(settings)(
-        Path("x.json"), Path("out"), Path("exp"), 7.5, "/opt/sf/stockfish"
+        Path("x.json"), Path("out"), Path("exp"), Path("svc"), 7.5, "/opt/sf/stockfish"
     )
 
 
@@ -69,6 +71,20 @@ def test_provider_headers_are_optional(tmp_path, models_data):
     models = load_models(write(tmp_path, models_data), {})
     assert models["local-llm"].provider.headers == {"x-bf-passthrough-extra-params": "true"}
     assert models["basal-mini"].provider.headers == {}
+
+
+def test_provider_server_fields_are_optional(tmp_path, models_data):
+    models_data["providers"][3].update(
+        start="just basal-serve", models_url="http://basal/v1/models", cleanup="just unload"
+    )
+    models = load_models(write(tmp_path, models_data), {})
+    basal, local = models["basal-mini"].provider, models["local-llm"].provider
+    assert (basal.start, basal.models_url, basal.cleanup) == (
+        "just basal-serve",
+        "http://basal/v1/models",
+        "just unload",
+    )
+    assert (local.start, local.models_url, local.cleanup) == (None, None, None)
 
 
 def test_openai_model_takes_reasoning_budget_below_max_tokens(tmp_path, models_data):
@@ -143,6 +159,12 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
             lambda d: d["providers"][1].update(headers={"authorization": "Bearer leak"}),
             "Authorization comes from token_env",
         ),
+        (lambda d: d["providers"][0].update(start="serve"), "'local': start needs models_url"),
+        (lambda d: d["providers"][0].update(cleanup=""), r"cleanup\s+String should have"),
+        (
+            lambda d: d["providers"][0].update(models_url="localhost:8081/models"),
+            r"models_url\s+String should match pattern",
+        ),
     ],
     ids=[
         "duplicate-id",
@@ -169,6 +191,9 @@ def test_empty_token_variable_means_no_token_but_available(tmp_path, models_data
         "empty-header-name",
         "header-value-not-string",
         "authorization-header",
+        "start-without-models-url",
+        "empty-cleanup",
+        "models-url-without-scheme",
     ],
 )
 def test_invalid_config_is_rejected(tmp_path, models_data, change, message):

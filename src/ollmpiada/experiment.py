@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from ollmpiada.competition import check_games, default_max_turns
-from ollmpiada.config import Model
+from ollmpiada.config import Model, Strict
 from ollmpiada.players import PlayerError, resolve_player
 from ollmpiada.registry import MASTERS
 
@@ -19,16 +19,12 @@ class ExperimentError(Exception):
     """An experiment that is missing or whose `experiment.json` is invalid."""
 
 
-class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class _CompetitionEntry(_Strict):
+class _CompetitionEntry(Strict):
     players: tuple[str, str]
     runs: Annotated[int, Field(ge=1)] = 1
 
 
-class _ExperimentFile(_Strict):
+class _ExperimentFile(Strict):
     game: str
     games: Annotated[int, Field(ge=1)]
     max_turns: Annotated[int, Field(ge=1)] | None = None
@@ -148,15 +144,17 @@ def progress(experiment: Experiment) -> list[Progress]:
     or have no readable `competition.json`, are ignored.
     """
     runs: dict[tuple[str, str], list[RunFolder]] = {p.players: [] for p in experiment.competitions}
+    # The run saves the game's own name, which need not be its registry key.
+    wanted = (MASTERS[experiment.game].game.name, experiment.games, experiment.max_turns)
     folders = sorted(experiment.runs_dir.iterdir()) if experiment.runs_dir.is_dir() else []
     for folder in folders:
         try:
             saved = json.loads((folder / "competition.json").read_text(encoding="utf-8"))
-        except OSError, json.JSONDecodeError:
+            players = tuple(saved["players"])
+            settings = (saved["game"], saved["games"], saved.get("max_turns"))
+            if players in runs and settings == wanted:
+                runs[players].append(RunFolder(folder, str(saved.get("status", ""))))
+        # Not UTF-8 or not JSON (ValueError), not an object, or fields of other types.
+        except OSError, ValueError, TypeError, KeyError:
             continue
-        settings = (saved.get("game"), saved.get("games"), saved.get("max_turns"))
-        players = tuple(saved.get("players", ()))
-        wanted = (experiment.game, experiment.games, experiment.max_turns)
-        if players in runs and settings == wanted:
-            runs[players].append(RunFolder(folder, saved.get("status", "")))
     return [Progress(p, tuple(runs[p.players])) for p in experiment.competitions]

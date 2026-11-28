@@ -25,11 +25,13 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
   "providers": [
     {"name": "bifrost", "url": "http://localhost:8080/v1",
      "api": "openai-completions", "timeout_s": 300,
-     "headers": {"x-bf-passthrough-extra-params": "true"}},
+     "headers": {"x-bf-passthrough-extra-params": "true"},
+     "models_url": "http://localhost:8081/v1/models", "cleanup": "just llama-unload"},
     {"name": "anthropic", "url": "https://api.anthropic.com",
      "api": "anthropic-messages", "token_env": "ANTHROPIC_API_KEY"},
     {"name": "decision-server", "url": "http://localhost:8000/v1/systemone",
-     "api": "systemone"}
+     "api": "systemone", "start": "just basal-serve",
+     "models_url": "http://localhost:8000/v1/models"}
   ],
   "models": [
     {"id": "qwen3-8b", "provider": "bifrost", "model": "llama.cpp/Qwen3-8B-GGUF",
@@ -49,7 +51,9 @@ be changed with `OLLMPIADA_MODELS_CONFIG`.
 `qwen3-8b` goes through Bifrost, so its provider sends the passthrough header
 that lets `reasoning_budget` reach llama.cpp; `instruct-7b` uses `prompted`
 output, the fallback for a model whose grammar llama.cpp cannot build (both in
-[model fields](#model-fields)). The [README](../README.md#configuring-models)
+[model fields](#model-fields)). For experiments, Bifrost's llama.cpp router behind
+it is checked at its own `models_url` and freed with `cleanup`, while the decision
+server is started on demand with `start`. The [README](../README.md#configuring-models)
 walks through the same example and why each option is there.
 
 ### Provider fields
@@ -62,6 +66,9 @@ walks through the same example and why each option is there.
 | `token_env` | no | Name of the environment variable holding the bearer token |
 | `timeout_s` | no | Timeout of one call to this provider's models in seconds, above 0; missing means `OLLMPIADA_REQUEST_TIMEOUT_S` |
 | `headers` | no | HTTP headers sent on every call to this provider's models, as a map of name to value; missing means none |
+| `start` | no | Shell command that starts the provider's server, which [`experiment run`](experiments.md#servers) then owns: it starts and stops it. Requires `models_url` |
+| `models_url` | no | GET URL listing the served models, which `experiment run` polls until a competition's models are listed; written out, never derived from `url` |
+| `cleanup` | no | Shell command that frees the GPU memory of a server that keeps running; `experiment run` runs it before a competition that does not use the provider and at the end |
 
 | `api` | Player | `url` |
 | --- | --- | --- |
@@ -180,8 +187,9 @@ The loader validates the file with Pydantic at startup: unique ids, existing
 provider names, known `api`, effort and `output_mode` values, `max_options` of at
 least 2, `max_tokens` of at least 1, a `reasoning_budget` of at least 1 and below
 `max_tokens`, a positive `timeout_s`, `headers` with non-empty names, string
-values and no `Authorization`. An invalid file stops the app with a message
-naming the bad entry.
+values and no `Authorization`, non-empty `start` and `cleanup`, and an
+`http://` or `https://` `models_url`, required wherever `start` is set. An invalid
+file stops the app with a message naming the bad entry.
 
 ## Environment
 
@@ -194,6 +202,7 @@ not read it. `.env.example` lists the variable names with empty values.
 | `OLLMPIADA_MODELS_CONFIG` | `config/models.json` | Path to the model config |
 | `OLLMPIADA_RUNS_DIR` | `.local/runs` | Where competition results are written |
 | `OLLMPIADA_EXPERIMENTS_DIR` | `.local/experiments` | Where [experiments](experiments.md#experiment-folder) live; an experiment's competitions are written to its own `runs/` instead of `OLLMPIADA_RUNS_DIR` |
+| `OLLMPIADA_SERVICES_DIR` | `.local/services` | PID files and output of the servers [`experiment run`](experiments.md#servers) starts |
 | `OLLMPIADA_REQUEST_TIMEOUT_S` | `120` | Timeout of one model call in seconds; a provider's `timeout_s` overrides it ([provider fields](#provider-fields)) |
 | `OLLMPIADA_STOCKFISH` | `stockfish` (looked up on `PATH`) | Path to the Stockfish binary that adjudicates chess games at the turn limit; required for chess ([end of game](game-master/results.md#end-of-game)) |
 | *names from `token_env`* | none | Provider tokens |

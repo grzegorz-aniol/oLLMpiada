@@ -16,7 +16,9 @@ from ollmpiada.experiment import ExperimentError, load_experiment, progress
 from ollmpiada.games.chess_game import ChessGame
 from ollmpiada.players import resolve_player
 from ollmpiada.players.base import TransportError, TurnAnswer
-from tests.fakes import WARM_UP, ScriptedPlayer
+from ollmpiada.registry import MASTERS
+from ollmpiada.servers import Servers
+from tests.fakes import WARM_UP, FakeServer, ScriptedPlayer, gone
 
 RESIGN = TurnAnswer(action="resign")
 MODELS = {"L": "local-llm@high", "B": "basal-mini", "C": "claude@none"}
@@ -181,6 +183,33 @@ def test_only_finished_runs_with_the_same_players_and_settings_count(root, model
     assert (rows[1].finished, rows[1].done) == (2, True)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"[1, 2]",
+        b'{"players": [["local-llm@high"], ["basal-mini"]], "game": "chess", "games": 2}',
+        b'{"players": 5, "game": "chess", "games": 2}',
+        b'{"game": "chess", "games": 2}',
+        b'{"players": ["local-llm@high", "basal-mini"], "game": "\xff"}',
+    ],
+    ids=["not-an-object", "players-of-lists", "players-not-a-list", "no-players", "not-utf8"],
+)
+def test_a_run_folder_with_an_unreadable_competition_file_is_ignored(root, models, content):
+    folder = write_experiment(root)
+    (folder / "runs" / "01_odd").mkdir(parents=True)
+    (folder / "runs" / "01_odd" / "competition.json").write_bytes(content)
+    write_run(folder, "02_lb", ("local-llm@high", "basal-mini"))
+    [row] = progress(load_experiment(folder, models))
+    assert [run.path.name for run in row.runs] == ["02_lb"]
+
+
+def test_runs_match_on_the_game_name_they_save_not_the_registry_key(root, models, monkeypatch):
+    monkeypatch.setitem(MASTERS, "classic", MASTERS["chess"])
+    folder = write_experiment(root, game="classic")
+    write_run(folder, "01", ("local-llm@high", "basal-mini"), game="chess")
+    assert progress(load_experiment(folder, models))[0].done
+
+
 def test_status_shows_each_competition_with_its_runs(root, capsys):
     folder = write_experiment(
         root, competitions=[{"players": ["L", "B"]}, {"players": ["B", "L"], "runs": 2}]
@@ -313,3 +342,133 @@ def test_ctrl_c_stops_the_experiment_after_the_competition_in_progress(
     assert len(competitions) == 1
     [run] = (folder / "runs").iterdir()
     assert json.loads((run / "competition.json").read_text())["status"] == "stopped"
+
+
+# --- servers ---
+
+
+def add_server_fields(models_file, **providers):
+    """Give the named providers of the model config their `start`, `models_url`, `cleanup`."""
+    data = json.loads(models_file.read_text())
+    for provider in data["providers"]:
+        provider.update(providers.get(provider["name"], {}))
+    models_file.write_text(json.dumps(data))
+
+
+@pytest.fixture
+def quick_servers(monkeypatch):
+    for name, value in (("ready_timeout_s", 5), ("stop_timeout_s", 2), ("poll_s", 0.05)):
+        monkeypatch.setitem(Servers.__init__.__kwdefaults__, name, value)
+
+
+def test_run_prepares_the_servers_before_each_competition_and_stops_them_at_the_end(
+    root, played, models_file, tmp_path, quick_servers, capsys
+):
+    competitions, _ = played
+    fake = FakeServer(tmp_path, "local", "--models", "Qwen")
+    cleanups = tmp_path / "cleanups.txt"
+    add_server_fields(
+        models_file,
+        local={"start": fake.command, "models_url": fake.url},
+        **{"claude-proxy": {"cleanup": f"echo claude-proxy >> {cleanups}"}},
+    )
+    write_experiment(root, competitions=[{"players": ["L", "B"]}, {"players": ["C", "B"]}])
+    assert main(["experiment", "run", "exp"]) == 0
+    out = capsys.readouterr().out
+    steps = [
+        "Running the cleanup of claude-proxy",
+        "Starting the server of local",
+        "local is ready after",
+        "Competition 1 of 2: local-llm@high vs basal-mini, run 1 of 1",
+        "Stopping the server of local",
+        "Competition 2 of 2: claude@none vs basal-mini, run 1 of 1",
+        "Running the cleanup of claude-proxy",
+        "2 of 2 competitions done.",
+    ]
+    position = 0
+    for step in steps:  # in this order
+        position = out.index(step, position) + len(step)
+    assert cleanups.read_text() == "claude-proxy\n" * 2
+    assert len(competitions) == 2 and gone(fake.child)
+
+
+def test_a_competition_whose_server_fails_is_reported_and_the_next_one_plays(
+    root, played, models_file, quick_servers, capsys
+):
+    competitions, _ = played
+    add_server_fields(
+        models_file, local={"start": "exit 3", "models_url": "http://127.0.0.1:9/models"}
+    )
+    write_experiment(root, competitions=[{"players": ["L", "B"]}, {"players": ["C", "B"]}])
+    assert main(["experiment", "run", "exp"]) == 1
+    out = capsys.readouterr().out
+    assert "Competition 1: the server of local exited before it was ready" in out
+    assert "Competition 1 of 2" not in out
+    assert "1 of 2 competitions done; failed this time: 1." in out
+    assert competitions == [("claude@none", "basal-mini")]
+
+
+def test_ctrl_c_while_a_server_gets_ready_stops_it_and_ends_the_experiment(
+    root, played, models_file, tmp_path, quick_servers, monkeypatch, capsys
+):
+    competitions, _ = played
+    fake = FakeServer(tmp_path, "local", "--models", "Qwen", "--delay", "30")
+    add_server_fields(models_file, local={"start": fake.command, "models_url": fake.url})
+    write_experiment(root, competitions=[{"players": ["L", "B"]}, {"players": ["C", "B"]}])
+    pid_file = tmp_path / "services" / "local.pid"
+    groups: list[int] = []
+
+    def press_ctrl_c(self, provider, wanted):
+        groups.append(int(pid_file.read_text()))
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Servers, "_wait_ready", press_ctrl_c)
+    assert main(["experiment", "run", "exp"]) == 1
+    out = capsys.readouterr().out
+    assert "Stopping the server of local" in out and "Experiment stopped." in out
+    assert "0 of 2 competitions done." in out
+    assert competitions == [] and not pid_file.exists()
+    with pytest.raises(ProcessLookupError):
+        os.killpg(groups[0], 0)
+
+
+def test_dry_run_prints_the_preparation_and_touches_nothing(
+    root, played, models_file, tmp_path, monkeypatch, capsys
+):
+    competitions, _ = played
+    marker = tmp_path / "touched"
+    url = "http://127.0.0.1:9/models"
+    add_server_fields(
+        models_file,
+        local={"start": f"touch {marker}", "models_url": url},
+        basal={"start": f"touch {marker}", "models_url": url},
+        **{"claude-proxy": {"cleanup": f"touch {marker}"}},
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("a dry run starts nothing and asks nothing")
+
+    for name in ("subprocess.Popen", "subprocess.run", "httpx.get"):
+        monkeypatch.setattr(f"ollmpiada.servers.{name}", forbidden)
+    folder = write_experiment(
+        root,
+        models={**MODELS, "H": "hosted-llm"},
+        competitions=[{"players": ["L", "B"]}, {"players": ["H", "B"]}, {"players": ["C", "L"]}],
+    )
+    write_run(folder, "01", ("local-llm@high", "basal-mini"))
+    assert main(["experiment", "run", "exp", "--dry-run"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "Competition 2 of 3: hosted-llm vs basal-mini",
+        "  stop: -",
+        "  cleanup: claude-proxy",
+        "  start: basal",
+        "Competition 3 of 3: claude@none vs local-llm@high",
+        "  stop: basal",
+        "  cleanup: -",
+        "  start: local",
+        "At the end:",
+        "  stop: local",
+        "  cleanup: claude-proxy",
+    ]
+    assert not marker.exists() and not (tmp_path / "services").exists()
+    assert competitions == [] and len(list((folder / "runs").iterdir())) == 1

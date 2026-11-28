@@ -143,7 +143,7 @@ argparse subcommands; Rich renders everything the user sees.
 | `ollmpiada probe <model>[@effort]` | Sends one turn in the game's start per answer format: for chess an [opening](game-master/turns.md#opening) turn (move only) and a move-6 turn (full answer), for a game whose turns are all move-only (bridge) one turn, the opening lead; prints each parsed answer, time and tokens and exits 0 only when every answer matches its format; flag `--game` |
 | `ollmpiada run <a>[@effort] <b>[@effort]` | Plays a competition; flags `--game` (`chess`, the default, or `bridge`), `--games`, `--max-turns`, `--seed`, `--mode visual\|background` |
 | `ollmpiada show <run-dir>` | Prints the results and statistics of a saved competition, with the [board table](game-master/results.md#statistics) for a game played in duplicate pairs |
-| `ollmpiada experiment list\|status <id>\|run <id>` | Lists experiments, shows one's competitions and runs, or plays its pending competitions one after another through the same code as `run`; owned by [experiments](experiments.md#commands) |
+| `ollmpiada experiment list\|status <id>\|run <id> [--dry-run]` | Lists experiments, shows one's competitions and runs, or plays its pending competitions one after another through the same code as `run`, starting and stopping their servers (`--dry-run` only prints that); owned by [experiments](experiments.md#commands) |
 
 A model is named `<id>@<effort>`, as in
 [model fields](configuration.md#model-fields). `run` checks the models and efforts
@@ -226,6 +226,10 @@ same tables.
 - `src/ollmpiada/experiment.py` - loads and validates `experiment.json`
   (`load_experiment`) and reads each planned competition's runs from `runs/`
   (`progress`); see [experiments](experiments.md).
+- `src/ollmpiada/servers.py` - `Servers`, the providers' servers around an
+  experiment's competitions: readiness, process-group start and stop, PID files,
+  `cleanup` (`prepare`, `close`), and `plan`, the steps `--dry-run` prints; see
+  [servers](experiments.md#servers).
 - `src/ollmpiada/config.py` - settings, model config models and loader.
 - `src/ollmpiada/registry.py` - `MASTERS`, the game masters by game name for
   `--game` (`chess`, `bridge`); outside `games/` because `game_master.py` imports
@@ -249,8 +253,11 @@ same tables.
   user's own setup (format in [configuration](configuration.md#model-config)).
 - `.env.example` - the environment variables to copy into `.env`.
 - `tests/` - test modules by area (`test_chess.py`, `test_bridge.py`,
-  `test_game_master.py`, ...), `fakes.py` (scripted fake players), `test_docs.py` (runs the docs check) and `test_golden.py` with `golden/` (the pinned model-facing requests); see [testing](testing.md).
+  `test_game_master.py`, ...), `fakes.py` (scripted fake players and the fake
+  server helpers), `fake_server.py` (a stand-in inference server a `start` command runs), `test_docs.py` (runs the docs check) and `test_golden.py` with `golden/` (the pinned model-facing requests); see [testing](testing.md).
 - `scripts/check_docs.py` - the docs link and reachability check.
 - `.local/runs/` - competition results, gitignored with the rest of `.local/`.
 - `.local/experiments/` - [experiments](experiments.md), each with its own `runs/`.
+- `.local/services/` - PID files and output of the [servers](experiments.md#servers)
+  experiments start.
 - `docs/images/` - images for the README and docs, as WebP sized for the page.

@@ -1,8 +1,14 @@
 """Fakes for tests: scripted players (with a fixed script, or picking from the legal moves),
 the only players game master and competition tests use,
-chess with a fixed engine score, so no test needs Stockfish, and a game of moves alone."""
+chess with a fixed engine score, so no test needs Stockfish, a game of moves alone, and an
+inference server to start and stop (`fake_server.py`)."""
 
 import asyncio
+import os
+import shlex
+import socket
+import sys
+from pathlib import Path
 
 import chess
 from chess.engine import Score
@@ -165,3 +171,38 @@ class MovesOnly(Game[tuple[str, ...]]):
         self, state: tuple[str, ...], outcome: Outcome | None, players: tuple[str, str], start: int
     ) -> str:
         return f"start {start}: {' '.join(state)}"
+
+
+FAKE_SERVER = Path(__file__).with_name("fake_server.py")
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def gone(pid: int) -> bool:
+    """Whether the process has ended; a zombie waiting to be reaped by init counts as ended."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    return stat.rsplit(")", 1)[1].split()[0] == "Z"
+
+
+class FakeServer:
+    """The command line of a fake server on a free port, and where it reports its child."""
+
+    def __init__(self, tmp_path: Path, name: str, *options: str) -> None:
+        port = free_port()
+        self.url = f"http://127.0.0.1:{port}/v1/models"
+        self.child_pid_file = tmp_path / f"{name}.child"
+        self.command = shlex.join(
+            [sys.executable, str(FAKE_SERVER), str(port), str(self.child_pid_file), *options]
+        )
+
+    @property
+    def child(self) -> int:
+        return int(self.child_pid_file.read_text())

@@ -135,6 +135,7 @@ after a failure ([experiments](docs/experiments.md)):
 uv run ollmpiada experiment list          # experiments and how many competitions are done
 uv run ollmpiada experiment status <id>   # each competition with its runs
 uv run ollmpiada experiment run <id>      # play the pending competitions
+uv run ollmpiada experiment run <id> --dry-run   # the servers it would start and stop
 ```
 
 ## Configuring models
@@ -163,11 +164,13 @@ provider prefix (`llama.cpp/`):
   "providers": [
     {"name": "bifrost", "url": "http://localhost:8080/v1",
      "api": "openai-completions", "timeout_s": 300,
-     "headers": {"x-bf-passthrough-extra-params": "true"}},
+     "headers": {"x-bf-passthrough-extra-params": "true"},
+     "models_url": "http://localhost:8081/v1/models", "cleanup": "just llama-unload"},
     {"name": "anthropic", "url": "https://api.anthropic.com",
      "api": "anthropic-messages", "token_env": "ANTHROPIC_API_KEY"},
     {"name": "decision-server", "url": "http://localhost:8000/v1/systemone",
-     "api": "systemone"}
+     "api": "systemone", "start": "just basal-serve",
+     "models_url": "http://localhost:8000/v1/models"}
   ],
   "models": [
     {"id": "qwen3-8b", "provider": "bifrost", "model": "llama.cpp/Qwen3-8B-GGUF",
@@ -205,6 +208,13 @@ The optional settings and why they are there:
   message and the reply text is parsed.
 - **`max_options: 20`** on the decision model, the most options its server
   accepts in one question; longer move lists are asked piece by piece.
+- **`start`, `models_url` and `cleanup`**, read only by `ollmpiada experiment
+  run`, which prepares the GPU before each competition. It starts the decision
+  server with `start`, waits until its `models_url` lists the model and stops it
+  when a competition does not need it. The llama.cpp router behind Bifrost keeps
+  running: its `models_url` points at the router itself, not at Bifrost, and
+  `cleanup` unloads its models before a competition that does not use them
+  ([servers](docs/experiments.md#servers)).
 
 Run `uv run ollmpiada models` to see what loaded and what is available. Every
 field, its validation and the reasoning behind it are in
